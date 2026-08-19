@@ -24,11 +24,11 @@ export default defineConfig({
   projects: [
     {
       name: 'desktop',
-      use: { viewport: { width: 1280, height: 720 } },
+      use: { viewport: { width: 1280, height: 720 }, hasTouch: true },
     },
     {
       name: 'mobile',
-      use: { viewport: { width: 390, height: 844 } },
+      use: { viewport: { width: 390, height: 844 }, hasTouch: true },
     },
   ],
 });

@@ -18,6 +18,8 @@ import {
   type RocketQAPI,
 } from './types.js';
 
+import type { BlendMode } from './engine/CameraMode.js';
+
 // ─── Audio Engine (WebAudio synthesized ambience) ────────────────────────────
 
 class AudioEngine {
@@ -218,7 +220,9 @@ class App {
       this._cameraDir = new CameraDirector(this._scene.camera);
 
       // Manual camera controller (mouse/touch drag orbit + auto-return)
-      this._manualCamera = new ManualCameraController(this._scene.renderer.domElement);
+      this._manualCamera = new ManualCameraController(this._scene.renderer.domElement, () =>
+        this._cameraDir.getCameraPosition(),
+      );
 
       // Mode indicator element
       const modeDiv = document.createElement('div');
@@ -390,6 +394,25 @@ class App {
     (window as unknown as Record<string, RocketQAPI>).__rocketQA = api;
   }
 
+  private _getCameraState(): {
+    mode: BlendMode;
+    weight: number;
+    theta: number;
+    phi: number;
+    radius: number;
+  } | null {
+    if (!this._isReady) return null;
+    const blend = this._manualCamera.getBlendState();
+    const state = this._manualCamera.getState();
+    return {
+      mode: blend.mode,
+      weight: blend.weight,
+      theta: state.theta,
+      phi: state.phi,
+      radius: state.radius,
+    };
+  }
+
   private _loop = (now: number): void => {
     this._frameId = requestAnimationFrame(this._loop);
 
@@ -517,11 +540,17 @@ class App {
 
       // Update mode indicator
       const blend2 = this._manualCamera.getBlendState();
-      if (blend2.weight >= 0.99) {
+      if (blend2.mode === 'manual' && blend2.weight >= 0.99) {
         this._modeIndicator.className = 'camera-mode active';
         this._modeIndicator.setAttribute(
           'aria-label',
           'Camera mode: manual orbit — release to return to cinematic follow',
+        );
+      } else if (blend2.mode === 'returning') {
+        this._modeIndicator.className = 'camera-mode returning';
+        this._modeIndicator.setAttribute(
+          'aria-label',
+          'Camera mode: returning to cinematic follow',
         );
       } else {
         this._modeIndicator.className = 'camera-mode';

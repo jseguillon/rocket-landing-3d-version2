@@ -241,6 +241,14 @@ canvas {
   background: rgba(255, 153, 68, 0.1);
 }
 
+.camera-mode.returning {
+  opacity: 1;
+  transform: translateY(0);
+  color: #aa88ff;
+  border-color: rgba(170, 136, 255, 0.3);
+  background: rgba(170, 136, 255, 0.1);
+}
+
 /* Show indicator briefly on manual entry, hide after blend-out */
 .camera-mode.show {
   opacity: 1;

@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as THREE from 'three';
 import { ManualCameraController } from '../engine/CameraMode.js';
 
 // Helper to access private properties via Record cast
 const m = (c: ManualCameraController) => c as unknown as Record<string, unknown>;
+
+// Helper for numeric private property access
+const n = <K extends string>(c: ManualCameraController, key: K): number =>
+  (c as unknown as Record<K, number>)[key];
 
 // Mock canvas element for testing
 function createMockCanvas(): HTMLCanvasElement {
@@ -96,8 +101,8 @@ describe('ManualCameraController', () => {
 
   describe('blend-out transition', () => {
     it('transitioning from manual to follow reduces weight over time', () => {
-      // Simulate blend-out starting
-      m(controller)._mode = 'follow';
+      // Simulate blend-out starting (mode is 'returning' during blend)
+      m(controller)._mode = 'returning';
       m(controller)._weight = 1;
       m(controller)._blendFromWeight = 1;
       const startTime = performance.now();
@@ -120,8 +125,8 @@ describe('ManualCameraController', () => {
     });
 
     it('blend-out uses easing (not linear)', () => {
-      // Start blend-out
-      m(controller)._mode = 'follow';
+      // Start blend-out (mode is 'returning')
+      m(controller)._mode = 'returning';
       m(controller)._weight = 1;
       m(controller)._blendFromWeight = 1;
       const startTime = performance.now();
@@ -144,8 +149,8 @@ describe('ManualCameraController', () => {
     });
 
     it('input during blend-out cancels and re-enters manual', () => {
-      // Simulate blend-out in progress
-      m(controller)._mode = 'follow';
+      // Simulate blend-out in progress (mode is 'returning')
+      m(controller)._mode = 'returning';
       m(controller)._weight = 1;
       m(controller)._blendFromWeight = 1;
       const startTime = performance.now();
@@ -160,7 +165,7 @@ describe('ManualCameraController', () => {
       controller.updateFrame(fakeNowVal);
       (performance as unknown as Record<string, unknown>).now = origNow;
 
-      expect(controller.getBlendState().mode).toBe('follow');
+      expect(controller.getBlendState().mode).toBe('returning');
       expect(controller.getBlendState().weight).toBeGreaterThan(0);
 
       // Simulate new input (same as _enterManual)
@@ -290,6 +295,113 @@ describe('ManualCameraController', () => {
     it('destroy removes all event listeners without errors', () => {
       // Should not throw
       expect(() => controller.destroy()).not.toThrow();
+    });
+  });
+
+  describe('enterManualFromCamera — no snap on first input', () => {
+    it('seeds spherical coords from camera position to prevent snap', () => {
+      const mockCamPos = new THREE.Vector3(10, 20, 15);
+      controller.updateFocusPoint(0, 10, 0);
+
+      // Simulate having a camera position callback that returns the mocked position
+      const getCameraPosition = () => mockCamPos;
+      (controller as unknown as Record<string, unknown>).__getCameraPosition = getCameraPosition;
+
+      controller.enterManualFromCamera(mockCamPos);
+
+      const blend = controller.getBlendState();
+      expect(blend.mode).toBe('manual');
+      expect(blend.weight).toBe(1);
+
+      // Spherical coords should match camera position, not defaults
+      const state = controller.getState();
+      const dx = mockCamPos.x - 0;
+      const dz = mockCamPos.z - 0;
+      const expectedTheta = Math.atan2(dx, dz);
+      expect(state.theta).toBeCloseTo(expectedTheta, 5);
+
+      // Radius should match distance from focus
+      const dist = Math.sqrt(dx * dx + (mockCamPos.y - 10) ** 2 + dz * dz);
+      expect(state.radius).toBeCloseTo(dist, 5);
+    });
+
+    it('targets set to current values so smoothing does not drift', () => {
+      const mockCamPos = new THREE.Vector3(5, 15, 8);
+      controller.updateFocusPoint(0, 10, 0);
+
+      const getCameraPosition = () => mockCamPos;
+      (controller as unknown as Record<string, unknown>).__getCameraPosition = getCameraPosition;
+
+      controller.enterManualFromCamera(mockCamPos);
+
+      // target values should equal current values (no drift)
+      expect(n(controller, '_targetTheta')).toBeCloseTo(n(controller, '_theta'), 5);
+      expect(n(controller, '_targetPhi')).toBeCloseTo(n(controller, '_phi'), 5);
+      expect(n(controller, '_targetRadius')).toBeCloseTo(n(controller, '_radius'), 5);
+    });
+  });
+
+  describe('mid-return cancellation', () => {
+    it('cancelReturn preserves current spherical coords and re-enters manual', () => {
+      m(controller)._mode = 'returning';
+      m(controller)._weight = 0.5;
+      const savedTheta = 1.234;
+      const savedPhi = 0.567;
+      const savedRadius = 42;
+      m(controller)._theta = savedTheta;
+      m(controller)._phi = savedPhi;
+      m(controller)._radius = savedRadius;
+
+      controller.cancelReturn();
+
+      const blend = controller.getBlendState();
+      expect(blend.mode).toBe('manual');
+      expect(blend.weight).toBe(1);
+      expect(m(controller)._theta).toBeCloseTo(savedTheta, 5);
+      expect(m(controller)._phi).toBeCloseTo(savedPhi, 5);
+      expect(m(controller)._radius).toBeCloseTo(savedRadius, 5);
+    });
+
+    it('cancelReturn with camera position seeds spherical coords', () => {
+      m(controller)._mode = 'returning';
+      m(controller)._weight = 0.3;
+      m(controller)._theta = 999; // would be wrong if not updated
+      controller.updateFocusPoint(0, 10, 0);
+
+      const camPos = new THREE.Vector3(5, 20, 8);
+      controller.cancelReturn(camPos);
+
+      const blend = controller.getBlendState();
+      expect(blend.mode).toBe('manual');
+      expect(blend.weight).toBe(1);
+
+      // Theta should be seeded from camera position, not old value
+      const dx = camPos.x - 0;
+      const dz = camPos.z - 0;
+      const expectedTheta = Math.atan2(dx, dz);
+      expect(n(controller, '_theta')).toBeCloseTo(expectedTheta, 5);
+      expect(n(controller, '_theta')).not.toBe(999);
+    });
+
+    it('cancellation from returning preserves position (no jump)', () => {
+      m(controller)._mode = 'returning';
+      m(controller)._weight = 0.3;
+      const savedTheta = 2.1;
+      const savedPhi = -0.3;
+      const savedRadius = 55;
+      m(controller)._theta = savedTheta;
+      m(controller)._phi = savedPhi;
+      m(controller)._radius = savedRadius;
+
+      controller.cancelReturn();
+
+      // Spherical coords must be unchanged — no positional jump
+      expect(m(controller)._theta).toBe(savedTheta);
+      expect(m(controller)._phi).toBe(savedPhi);
+      expect(m(controller)._radius).toBe(savedRadius);
+
+      const pos = controller.getPosition();
+      expect(pos.x).not.toBeNaN();
     });
   });
 });

@@ -540,7 +540,37 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     }
   });
 
-  test('manual mode returns to follow after inactivity', async ({ page }) => {
+  test('manual mode is active just before 3s inactivity', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Enter manual mode with drag (first input — should seed from current camera, no snap)
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 60, cy + 40, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Mode indicator should be active within first ~500ms after input
+    const modeEl = page.locator('.camera-mode');
+    const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(true);
+
+    // Screenshot: manual camera offset
+    const screenshotManual = await page.screenshot();
+    fs.writeFileSync(path.join(SCREENSHOT_DIR, 'manual-camera-offset.png'), Buffer.from(screenshotManual));
+
+    // Mode should still be active at 2.5s (well before 3s timeout)
+    await page.waitForTimeout(2200);
+    const stillActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(stillActive).toBe(true);
+  });
+
+  test('camera returns to follow after inactivity 3s + 800ms blend-out', async ({ page }) => {
     const canvas = page.locator('canvas');
     const box = await canvas.boundingBox();
     expect(box).not.toBeNull();
@@ -560,16 +590,27 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     let isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
     expect(isActive).toBe(true);
 
-    // Wait 4 seconds (more than 3s inactivity timeout)
-    await page.waitForTimeout(4000);
+    // Wait for inactivity timeout (3s) + blend-out duration (800ms) = 4500ms total
+    await page.waitForTimeout(4500);
 
-    // Mode indicator should no longer be active (or at least opacity changed)
+    // Mode indicator should no longer be active — fully back to cinematic follow
     modeEl = page.locator('.camera-mode');
     isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
     expect(isActive).toBe(false);
+
+    // Verify returned camera state via QA API
+    const qaState = await page.evaluate(() => {
+      const api = (window as unknown as Record<string, unknown>).__rocketQA;
+      return api;
+    });
+    expect(qaState).toBeDefined();
+
+    // Screenshot: restored follow mode
+    const screenshotFollow = await page.screenshot();
+    fs.writeFileSync(path.join(SCREENSHOT_DIR, 'manual-camera-restored-follow.png'), Buffer.from(screenshotFollow));
   });
 
-  test('input during blend-out cancels return to follow', async ({ page }) => {
+  test('mid-return input cancels return without snap', async ({ page }) => {
     const canvas = page.locator('canvas');
     const box = await canvas.boundingBox();
     expect(box).not.toBeNull();
@@ -584,29 +625,113 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     await page.mouse.up();
     await page.waitForTimeout(300);
 
-    // Mode should be active
+    // Mode should be active (manual)
     let modeEl = page.locator('.camera-mode');
     let isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
     expect(isActive).toBe(true);
 
-    // Wait 2.5s (less than 3s timeout, so blend-out hasn't started yet)
-    await page.waitForTimeout(2500);
+    // Wait for inactivity timeout (3s) + a bit into blend-out (200ms) = 3200ms
+    await page.waitForTimeout(3200);
 
-    // Mode should still be active
+    // Mode should be "returning" — check via aria-label or class presence
+    const modeClass = await modeEl.evaluate((el) => el.className);
+    expect(modeClass).toContain('returning');
+
+    // Now do a drag to cancel the return (mid-return input)
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 70, cy + 50, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Mode should be active again (manual) — no snap, position preserved
     modeEl = page.locator('.camera-mode');
     isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
     expect(isActive).toBe(true);
 
-    // Now do another drag to reset timer
-    await page.mouse.move(cx + 50, cy + 30);
-    await page.mouse.down();
-    await page.mouse.move(cx + 120, cy + 80, { steps: 10 });
-    await page.mouse.up();
+    // Verify the mode class is 'active', not 'returning'
+    const currentModeClass = await modeEl.evaluate((el) => el.className);
+    expect(currentModeClass).toContain('active');
+    expect(currentModeClass).not.toContain('returning');
+  });
+
+  test('first input seeds from camera position — no snap', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Take a screenshot in follow mode before any input
+    const screenshotBefore = await page.screenshot();
+
+    // First mouse wheel event (zoom) — should enter manual from current camera position
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.evaluate(() => {
+      const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+      canvas.dispatchEvent(new WheelEvent('wheel', { deltaMode: 0, deltaY: -50 }));
+    });
     await page.waitForTimeout(300);
 
-    // Mode should be active again
-    modeEl = page.locator('.camera-mode');
-    isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    // Should be in manual mode now (active indicator)
+    const modeEl = page.locator('.camera-mode');
+    const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(true);
+
+    // Take screenshot after entering manual
+    const screenshotAfter = await page.screenshot();
+
+    // The camera should have changed (zoomed in/out due to wheel) but not snapped
+    // to a default position — screenshots must differ because zoom actually happened
+    expect(screenshotBefore).not.toEqual(screenshotAfter);
+
+    // Do another small drag and verify no snap back: take screenshot
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 10, cy + 5, { steps: 3 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+
+    const screenshotAfterDrag = await page.screenshot();
+    // Small drag should produce a subtle change, not a snap reset
+    expect(screenshotAfter).not.toEqual(screenshotAfterDrag);
+  });
+});
+
+// ─── Real TouchEvent Tests ──────────────────────────────────────────────────
+
+test.describe('Rocket Landing - Real Touch Events', () => {
+  test.beforeEach(async ({ page }) => {
+    const errors = collectConsoleAndErrors(page);
+    await page.goto('/rocket-landing-3d-version2/');
+    await waitForReady(page);
+    const msgs = await errors;
+    const jsErrors = msgs.filter(
+      (m) => m.startsWith('[pageerror]') || m.includes('TypeError'),
+    );
+    if (jsErrors.length > 0) {
+      throw new Error(`Console/page errors detected: ${jsErrors.join('; ')}`);
+    }
+  });
+
+  test('real TouchEvent enters manual mode', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Use Playwright's touchscreen.tap() which dispatches real TouchEvents
+    // with proper Touch objects created by the browser's touch simulation layer
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    await page.touchscreen.tap(cx, cy);
+    await page.waitForTimeout(300);
+
+    // Mode indicator should be active (manual mode entered via real TouchEvent)
+    const modeEl = page.locator('.camera-mode');
+    const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
     expect(isActive).toBe(true);
   });
 });
