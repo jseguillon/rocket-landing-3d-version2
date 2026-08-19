@@ -1,0 +1,19 @@
+# Codeowners for Rocket Landing 3D
+
+# Core engine code
+/src/engine/ @engine-team
+
+# UI components
+/src/ui/ @ui-team
+
+# E2E tests
+/e2e/ @qa-team
+
+# CI/CD workflows
+/.github/workflows/ @devops-team
+
+# Documentation
+/*.md /docs/ @docs-team
+
+# All changes require review from at least one core maintainer
+/* @maintainers
