@@ -1,0 +1,190 @@
+name: Quality Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    name: Lint, Typecheck, Test, Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+  playwright-visual:
+    name: Playwright Visual QA
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium and system deps
+        run: npx playwright install --with-deps chromium
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # ─── Clean and capture desktop screenshots (7 phases) ──────────────
+      - name: Clean screenshot directory
+        run: rm -f qa-artifacts/screenshots/*.png
+
+      - name: Run desktop screenshots
+        run: |
+          npx playwright test --grep "Desktop Visual Tests.*screenshot:" --project=desktop --timeout=30000
+        env:
+          CI: true
+
+      # ─── Capture mobile screenshot (1 hero) ──────────────────────────
+      - name: Run mobile screenshot
+        run: |
+          npx playwright test --grep "Mobile.*mobile screenshot:" --project=mobile --timeout=30000
+        env:
+          CI: true
+
+      # ─── Pixel analysis on screenshots ──────────────────────────────
+      - name: Run pixel analysis on screenshots
+        run: |
+          node scripts/analyze-screenshots.mjs qa-artifacts/screenshots
+
+      # ─── Natural video capture (full 40s animation) ─────────────────
+      - name: Capture natural 1280x720 video (full 40s animation)
+        run: |
+          rm -f qa-artifacts/demo.webm
+          npx playwright test --grep "captures full" --project=desktop --timeout=65000
+        env:
+          CI: true
+
+      # ─── Validate demo.webm structural integrity (hard fail) ────────
+      - name: Validate video quality
+        if: always()
+        run: |
+          mkdir -p qa-artifacts
+          DEMO="qa-artifacts/demo.webm"
+
+          # Hard-fail if file absent
+          if [ ! -f "$DEMO" ]; then
+            echo "FAIL: demo.webm not found"
+            exit 1
+          fi
+
+          SIZE=$(stat -c%s "$DEMO")
+          DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$DEMO" 2>/dev/null)
+          WIDTH=$(ffprobe -v quiet -select_streams v:0 -show_entries stream=width -of csv=p=0 "$DEMO" 2>/dev/null)
+          HEIGHT=$(ffprobe -v quiet -select_streams v:0 -show_entries stream=height -of csv=p=0 "$DEMO" 2>/dev/null)
+
+          # Hard-fail duration >= 25s (use awk for float comparison)
+          DUR_OK=$(echo "$DURATION" | awk '{print ($1 >= 25) ? "1" : "0"}')
+          if [ "$DUR_OK" != "1" ]; then
+            echo "FAIL: video duration ${DURATION}s < 25s minimum"
+            exit 1
+          fi
+
+          # Hard-fail resolution exactly 1280x720
+          if [ "$WIDTH" != "1280" ] || [ "$HEIGHT" != "720" ]; then
+            echo "FAIL: video resolution ${WIDTH}x${HEIGHT} != 1280x720"
+            exit 1
+          fi
+
+          # Hard-fail size >= 307200 (300KB)
+          if [ "$SIZE" -lt 307200 ]; then
+            echo "FAIL: video size ${SIZE}B < 300KB minimum"
+            exit 1
+          fi
+
+          echo "Video OK: duration=${DURATION}s resolution=${WIDTH}x${HEIGHT} size=${SIZE}bytes"
+
+          # Extract video metadata
+          ffprobe -v quiet -print_format json -show_format -show_streams "$DEMO" \
+            > qa-artifacts/video-metadata.json || exit 1
+
+          echo "Video: duration=${DURATION}s resolution=${WIDTH}x${HEIGHT} size=${SIZE}bytes" \
+            > qa-artifacts/video-summary.txt
+
+      # ─── Extract fixed timed frames near key moments ────────────────
+      - name: Extract timed frames for contact sheet
+        if: always()
+        run: |
+          mkdir -p qa-artifacts/frames
+          DEMO="qa-artifacts/demo.webm"
+          if [ -f "$DEMO" ]; then
+            # Extract frames near 3,10,17,24,31,39 seconds using explicit inputs
+            ffmpeg -y -ss 3 -i "$DEMO" -frames:v 1 qa-artifacts/frames/frame_3s.png
+            ffmpeg -y -ss 10 -i "$DEMO" -frames:v 1 qa-artifacts/frames/frame_10s.png
+            ffmpeg -y -ss 17 -i "$DEMO" -frames:v 1 qa-artifacts/frames/frame_17s.png
+            ffmpeg -y -ss 24 -i "$DEMO" -frames:v 1 qa-artifacts/frames/frame_24s.png
+            ffmpeg -y -ss 31 -i "$DEMO" -frames:v 1 qa-artifacts/frames/frame_31s.png
+            ffmpeg -y -ss 39 -i "$DEMO" -frames:v 1 qa-artifacts/frames/frame_39s.png
+          fi
+
+      # ─── Build contact sheet (require exactly 6 frames) ─────────────
+      - name: Build contact sheet
+        if: always()
+        run: |
+          FRAME_COUNT=$(ls qa-artifacts/frames/frame_*s.png 2>/dev/null | wc -l)
+          if [ "$FRAME_COUNT" -eq 6 ]; then
+            ffmpeg -y -pattern_type glob -framerate 1 -i "qa-artifacts/frames/frame_*s.png" -vf "scale=640:360,tile=3x2" -frames:v 1 qa-artifacts/contact-sheet.png
+          else
+            echo "FAIL: Expected 6 frames for contact sheet, found $FRAME_COUNT"
+            exit 1
+          fi
+          test -s qa-artifacts/contact-sheet.png
+
+      # ─── Upload all QA artifacts (always) ───────────────────────────
+      - name: Upload visual QA artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visual-qa-artifacts
+          path: |
+            qa-artifacts/screenshots/
+            qa-artifacts/demo.webm
+            qa-artifacts/frames/
+            qa-artifacts/contact-sheet.png
+            qa-artifacts/video-metadata.json
+            qa-artifacts/video-summary.txt
+            qa-artifacts/visual-report.json
+            qa-artifacts/visual-report.md
+          retention-days: 30
+
+      # ─── Upload Playwright report on failure ────────────────────────
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 30

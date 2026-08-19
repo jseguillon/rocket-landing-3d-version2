@@ -1,0 +1,49 @@
+{
+  "name": "rocket-landing-3d-version2",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A cinematic JavaScript 3D web experience of a reusable rocket descending from the upper atmosphere and landing vertically on Earth.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jseguillon/rocket-landing-3d-version2.git"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,json,css,html}\" \".github/**/*.yml\" \"*.md\"",
+    "format:write": "prettier --write \"src/**/*.{ts,tsx,json,css,html}\" \".github/**/*.yml\" \"*.md\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:screenshots": "npx playwright install chromium && rm -f qa-artifacts/screenshots/*.png && npx playwright test --grep \"Desktop Visual Tests.*screenshot:\" --project=desktop --timeout=30000 && npx playwright test --grep \"Mobile.*mobile screenshot:\" --project=mobile --timeout=30000 && npm run analyze:screenshots",
+    "analyze:screenshots": "node scripts/analyze-screenshots.mjs",
+    "ci:quality": "npm ci && npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && npx playwright install chromium && npm run test:e2e"
+  },
+  "dependencies": {
+    "three": "^0.164.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.44.1",
+    "@types/node": "^20.19.43",
+    "@types/three": "^0.164.0",
+    "@typescript-eslint/eslint-plugin": "^7.10.0",
+    "@typescript-eslint/parser": "^7.10.0",
+    "eslint": "^8.56.0",
+    "jsdom": "^24.0.0",
+    "pngjs": "^7.0.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.4",
+    "vitest": "^1.3.1"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
