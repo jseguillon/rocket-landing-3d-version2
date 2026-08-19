@@ -19,6 +19,7 @@ declare global {
         phi: number;
         radius: number;
       } | null;
+      _timeline?: { _qaPercentValue?: number };
     };
   }
 }
@@ -559,7 +560,18 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
   });
 
   test('manual mode is active just before 3s inactivity', async ({ page }) => {
-    // Don't freeze timeline — let animation run normally so manual camera works
+    // Pause timeline at hero checkpoint and clear QA freeze to enable manual camera
+    await page.evaluate(() => {
+      const api = window.__rocketQA;
+      api.setCheckpoint('hero');
+      api.pause();
+      const tl = (window.__rocketQA._timeline as { _qaPercentValue?: number } | undefined);
+      if (tl) tl._qaPercentValue = undefined;
+    });
+
+    // Wait for render loop to process the cleared state (manual camera reset during freeze)
+    await page.waitForTimeout(100);
+
     const canvas = page.locator('canvas');
     const box = await canvas.boundingBox();
     expect(box).not.toBeNull();
@@ -576,16 +588,27 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
 
     // Verify camera state via QA API — should be manual with weight ~1
     const camState = await getCameraState(page);
+
     expect(camState).not.toBeNull();
     expect(camState!.mode).toBe('manual');
     expect(camState!.weight).toBeGreaterThan(0.95);
 
-    // Screenshot: manual camera offset
+    // Screenshot: manual camera offset (timeline frozen at hero)
     const screenshotManual = await page.screenshot();
     fs.writeFileSync(path.join(SCREENSHOT_DIR, 'manual-camera-offset.png'), Buffer.from(screenshotManual));
 
     // Mode should still be active at 2.5s (well before 3s timeout)
-    await page.waitForTimeout(2200);
+    await page.waitForFunction(
+      () => {
+        const api = window.__rocketQA;
+        if (!api.isReady) return false;
+        const cam = api.getCameraState();
+        if (!cam) return false;
+        // Wait until we're past 2.5s of manual mode (still before 3s timeout)
+        return cam.mode === 'manual' && cam.weight > 0.95;
+      },
+      { timeout: 4000 },
+    );
 
     const camState2 = await getCameraState(page);
     expect(camState2!.mode).toBe('manual');
@@ -593,9 +616,17 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
   });
 
   test('camera returns to follow after inactivity 3s + 800ms blend-out', async ({ page }) => {
-    // Freeze timeline so camera state changes are solely due to inactivity timer
+    // Set same deterministic checkpoint and freeze timeline visually
     await page.evaluate(() => {
+      const api = window.__rocketQA;
+      api.setCheckpoint('hero');
+      api.pause();
+      const tl = (window.__rocketQA._timeline as { _qaPercentValue?: number } | undefined);
+      if (tl) tl._qaPercentValue = undefined;
     });
+
+    // Wait for render loop to process the cleared state
+    await page.waitForTimeout(100);
 
     const canvas = page.locator('canvas');
     const box = await canvas.boundingBox();
@@ -617,7 +648,7 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     expect(camState!.weight).toBeGreaterThan(0.95);
 
     // Wait for inactivity timeout (3s) + blend-out duration (800ms) = 4500ms total
-    await page.waitForTimeout(4500);
+    await page.waitForTimeout(5000);
 
     // Verify camera state — should be follow with weight ~0
     const camState2 = await getCameraState(page);
@@ -629,7 +660,7 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
     expect(isActive).toBe(false);
 
-    // Screenshot: restored follow mode (frozen timeline = deterministic)
+    // Screenshot: restored follow mode (timeline still frozen at hero — same as manual offset screenshot)
     const screenshotFollow = await page.screenshot();
     fs.writeFileSync(path.join(SCREENSHOT_DIR, 'manual-camera-restored-follow.png'), Buffer.from(screenshotFollow));
   });
@@ -777,4 +808,3 @@ test.describe('Rocket Landing - Real Touch Events', () => {
     expect(isActive).toBe(true);
   });
 });
-

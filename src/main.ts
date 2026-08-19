@@ -494,19 +494,16 @@ class App {
     if (!this._reducedMotion) {
       const qaFrozen = this._timeline._qaPercentValue !== undefined;
 
+      // Always update manual camera state so inactivity timer and blend-out progress normally
+      const [rx, ry, rz] = rocketState.position;
+      const visualCenterY = ry + 6;
+      this._manualCamera.updateFocusPoint(rx, visualCenterY, rz);
+      this._manualCamera.updateFrame(now);
+
       if (qaFrozen) {
-        // In QA freeze mode, disable manual control and use pure cinematic
-        this._manualCamera.reset();
+        // In QA freeze mode, use pure cinematic camera path only (preserve manual state)
         this._cameraDir.update(state.phase, state.time, rocketState);
       } else {
-        // Update focus point for manual camera (rocket visual center)
-        const [rx, ry, rz] = rocketState.position;
-        const visualCenterY = ry + 6;
-        this._manualCamera.updateFocusPoint(rx, visualCenterY, rz);
-
-        // Run frame update for blend-out progress and angle smoothing
-        this._manualCamera.updateFrame(now);
-
         const blend = this._manualCamera.getBlendState();
         const manualPos = this._manualCamera.getPosition();
 
@@ -544,18 +541,21 @@ class App {
       const blend2 = this._manualCamera.getBlendState();
       if (blend2.mode === 'manual' && blend2.weight >= 0.99) {
         this._modeIndicator.className = 'camera-mode active';
+        this._modeIndicator.textContent = 'MANUAL';
         this._modeIndicator.setAttribute(
           'aria-label',
           'Camera mode: manual orbit — returns after 3 seconds of inactivity',
         );
       } else if (blend2.mode === 'returning') {
         this._modeIndicator.className = 'camera-mode returning';
+        this._modeIndicator.textContent = 'RETURNING';
         this._modeIndicator.setAttribute(
           'aria-label',
           'Camera mode: returning to cinematic follow',
         );
       } else {
         this._modeIndicator.className = 'camera-mode';
+        this._modeIndicator.textContent = '';
         this._modeIndicator.setAttribute('aria-label', 'Camera mode: cinematic follow');
       }
     }
