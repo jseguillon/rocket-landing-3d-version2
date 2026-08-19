@@ -717,6 +717,44 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
       expect(snapBefore!.phase).toBe('landing-burn');
       expect(snapBefore!.time).toBeCloseTo(20, 1);
 
+      // DOM diagnostics before manual screenshot — verify HUD is clean
+      const domBefore = await page.evaluate(() => {
+        const phaseEl = document.getElementById('phase-value')!;
+        const altEl = document.getElementById('altitude-value')!;
+        const velEl = document.getElementById('velocity-value')!;
+        const thrEl = document.getElementById('thrust-value')!;
+        const legEl = document.getElementById('leg-value')!;
+        const telemetryEl = document.querySelector('.telemetry');
+        const camModeEl = document.querySelector('.camera-mode');
+        return {
+          phase: phaseEl.textContent,
+          altitude: altEl.textContent,
+          velocity: velEl.textContent,
+          thrust: thrEl.textContent,
+          legs: legEl.textContent,
+          telemetryRect: telemetryEl ? (telemetryEl as HTMLElement).getBoundingClientRect() : null,
+          camModeClass: camModeEl?.className ?? '',
+        };
+      });
+      expect(domBefore.phase).toBe('LANDING BURN');
+      expect(domBefore.altitude).toBe('64.0 m');
+      expect(domBefore.velocity).toBe('300.0 m/s');
+      expect(domBefore.thrust).toBe('15%');
+      expect(domBefore.legs).toBe('STOWED');
+      expect(domBefore.camModeClass).toContain('active');
+
+      // Diagnostic: element-only screenshot of telemetry overlay before manual shot
+      const telemetryElBefore = page.locator('.telemetry');
+      const rectBefore = await telemetryElBefore.boundingBox();
+      if (rectBefore) {
+        fs.writeFileSync(
+          path.join(SCREENSHOT_DIR, 'diag-telemetry-manual.png'),
+          Buffer.from(
+            await page.screenshot({ clip: { x: rectBefore.x, y: rectBefore.y, width: rectBefore.width, height: rectBefore.height } }),
+          ),
+        );
+      }
+
       // Canonical screenshots (desktop only) — mobile uses unique names to avoid cross-project races
       const screenshotManual = await page.screenshot();
       const isDesktop = testInfo.project.name === 'desktop';
@@ -730,6 +768,23 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
           path.join(SCREENSHOT_DIR, 'manual-camera-mobile-offset.png'),
           Buffer.from(screenshotManual),
         );
+      }
+
+      // Image-level HUD health assertion — verify manual screenshot shows readable HUD text
+      const PNG = await import('pngjs');
+      {
+        const png = PNG.PNG.sync.read(screenshotManual);
+        let brightPixels = 0;
+        for (let y = 30; y < 70 && y < png.height; y++) {
+          for (let x = 80; x < 260 && x < png.width; x++) {
+            const idx = (y * png.width + x) * 4;
+            const r = png.data[idx];
+            const g = png.data[idx + 1];
+            const b = png.data[idx + 2];
+            if (r > 180 && g > 180 && b > 180) brightPixels++;
+          }
+        }
+        expect(brightPixels).toBeGreaterThan(30, 'manual offset: HUD text appears truncated or missing');
       }
 
       // ── Step 2: Wait for full return to follow — capture "restored" state ─────
@@ -756,6 +811,101 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
 
       // Verify camera states differ meaningfully (theta shifted during manual drag)
       expect(camManual!.theta).not.toBeCloseTo(camFollow!.theta, 1);
+
+      // DOM diagnostics before restored screenshot — verify HUD is clean and not overlapping
+      const domAfter = await page.evaluate(() => {
+        const phaseEl = document.getElementById('phase-value')!;
+        const altEl = document.getElementById('altitude-value')!;
+        const velEl = document.getElementById('velocity-value')!;
+        const thrEl = document.getElementById('thrust-value')!;
+        const legEl = document.getElementById('leg-value')!;
+        const telemetryEl = document.querySelector('.telemetry') as HTMLElement;
+        const camModeEl = document.querySelector('.camera-mode');
+
+        // Check for overlapping/missing text by verifying each element's computed size
+        const items = Array.from(telemetryEl.querySelectorAll('.telemetry__item'));
+        const itemBoxes = items.map((el) => {
+          const box = (el as HTMLElement).getBoundingClientRect();
+          return { w: box.width, h: box.height, text: el.textContent };
+        });
+
+        // Verify no zero-width/height items (overlap indicator)
+        const overlaps = itemBoxes.filter((b) => b.w < 5 || b.h < 5);
+
+        return {
+          phase: phaseEl.textContent,
+          altitude: altEl.textContent,
+          velocity: velEl.textContent,
+          thrust: thrEl.textContent,
+          legs: legEl.textContent,
+          telemetryRect: telemetryEl ? telemetryEl.getBoundingClientRect() : null,
+          camModeClass: camModeEl?.className ?? '',
+          itemBoxes,
+          hasOverlaps: overlaps.length > 0,
+        };
+      });
+
+      // Assert DOM integrity in restored state — HUD must be fully readable
+      expect(domAfter.phase).toBe('LANDING BURN');
+      expect(domAfter.altitude).toBe('64.0 m');
+      expect(domAfter.velocity).toBe('300.0 m/s');
+      expect(domAfter.thrust).toBe('15%');
+      expect(domAfter.legs).toBe('STOWED');
+      expect(domAfter.camModeClass).not.toContain('active');
+      expect(domAfter.camModeClass).not.toContain('returning');
+      expect(domAfter.hasOverlaps).toBe(false);
+
+      // Verify telemetry item bounding boxes are non-zero (no CSS overlap)
+      for (const box of domAfter.itemBoxes) {
+        expect(box.w).toBeGreaterThan(30);
+        expect(box.h).toBeGreaterThan(15);
+      }
+
+      // Image-level HUD health assertions — verify both screenshots show readable HUD text
+      // by checking that the canvas+overlay composite contains expected bright pixels
+      // in the telemetry region (proves no WebGL compositing corruption)
+      async function assertHudReadable(screenshot: Buffer, label: string): Promise<void> {
+        const PNG = await import('pngjs');
+        const png = PNG.PNG.sync.read(screenshot);
+
+        // Telemetry overlay is at top-left. Sample the HUD region where text appears.
+        // Phase value area: x=80-250, y=30-60 (white text on dark background)
+        let brightPixels = 0;
+        const hudW = 180;
+        const hudH = 40;
+        const startX = 80;
+        const startY = 30;
+
+        for (let y = startY; y < startY + hudH && y < png.height; y++) {
+          for (let x = startX; x < startX + hudW && x < png.width; x++) {
+            const idx = (y * png.width + x) * 4;
+            const r = png.data[idx];
+            const g = png.data[idx + 1];
+            const b = png.data[idx + 2];
+            if (r > 180 && g > 180 && b > 180) {
+              brightPixels++;
+            }
+          }
+        }
+
+        // Phase "LANDING BURN" at ~1.3em monospace font should produce many bright pixels
+        // If only "L" renders, bright pixel count would be ~7x lower
+        expect(brightPixels).toBeGreaterThan(30, `${label}: HUD text appears truncated or missing (only ${brightPixels} bright pixels in HUD region)`);
+      }
+
+      await assertHudReadable(screenshotManual, 'manual offset');
+
+      // Diagnostic: element-only screenshot of telemetry overlay before restored shot
+      const telemetryElAfter = page.locator('.telemetry');
+      const rectAfter = await telemetryElAfter.boundingBox();
+      if (rectAfter) {
+        fs.writeFileSync(
+          path.join(SCREENSHOT_DIR, 'diag-telemetry-restored.png'),
+          Buffer.from(
+            await page.screenshot({ clip: { x: rectAfter.x, y: rectAfter.y, width: rectAfter.width, height: rectAfter.height } }),
+          ),
+        );
+      }
 
       // Screenshot: restored follow mode (same frozen checkpoint = identical scene state)
       const screenshotFollow = await page.screenshot();
