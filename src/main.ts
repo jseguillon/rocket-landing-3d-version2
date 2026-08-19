@@ -3,6 +3,7 @@ import { SceneRenderer } from './engine/Scene.js';
 import { EnvironmentBuilder } from './engine/Environment.js';
 import { RocketBuilder } from './engine/Rocket.js';
 import { CameraDirector } from './engine/Camera.js';
+import { ManualCameraController } from './engine/CameraMode.js';
 import { PlumeSystem, DustSystem, FlameMesh } from './engine/Particles.js';
 import { PostProcessor } from './engine/PostProcessing.js';
 import { TimelineEngine } from './engine/Timeline.js';
@@ -160,6 +161,8 @@ class App {
   private _scene!: SceneRenderer;
   private _rocket!: RocketBuilder;
   private _cameraDir!: CameraDirector;
+  private _manualCamera!: ManualCameraController;
+  private _modeIndicator!: HTMLElement;
   private _plume!: PlumeSystem;
   private _dust!: DustSystem;
   private _flame!: FlameMesh;
@@ -213,6 +216,17 @@ class App {
 
       // Camera director
       this._cameraDir = new CameraDirector(this._scene.camera);
+
+      // Manual camera controller (mouse/touch drag orbit + auto-return)
+      this._manualCamera = new ManualCameraController(this._scene.renderer.domElement);
+
+      // Mode indicator element
+      const modeDiv = document.createElement('div');
+      this._modeIndicator = container.appendChild(modeDiv);
+      this._modeIndicator.className = 'camera-mode';
+      this._modeIndicator.setAttribute('role', 'status');
+      this._modeIndicator.setAttribute('aria-live', 'polite');
+      this._modeIndicator.setAttribute('aria-label', 'Camera mode: cinematic follow');
 
       // Get initial dimensions for post-processing
       const dims = this._scene.getDimensions();
@@ -334,6 +348,8 @@ class App {
     // Reset particle warm-up so QA seeding re-runs on next freeze
     this._plume.reset();
     this._dust.reset();
+    // Reset manual camera to follow mode
+    this._manualCamera.reset();
   }
 
   private _exposeQA(): void {
@@ -449,9 +465,68 @@ class App {
         ? rocketState.engineThrust * 8
         : this._engineLight.intensity * 0.95;
 
-    // Camera choreography — pass rocket state for relative framing
+    // Camera choreography — blend between cinematic follow and manual orbit
     if (!this._reducedMotion) {
-      this._cameraDir.update(state.phase, state.time, rocketState);
+      const qaFrozen = this._timeline._qaPercentValue !== undefined;
+
+      if (qaFrozen) {
+        // In QA freeze mode, disable manual control and use pure cinematic
+        this._manualCamera.reset();
+        this._cameraDir.update(state.phase, state.time, rocketState);
+      } else {
+        // Update focus point for manual camera (rocket visual center)
+        const [rx, ry, rz] = rocketState.position;
+        const visualCenterY = ry + 6;
+        this._manualCamera.updateFocusPoint(rx, visualCenterY, rz);
+
+        // Run frame update for blend-out progress and angle smoothing
+        this._manualCamera.updateFrame(now);
+
+        const blend = this._manualCamera.getBlendState();
+        const manualPos = this._manualCamera.getPosition();
+
+        if (blend.weight >= 0.99) {
+          // Fully in manual mode — set position directly, look at focus point
+          this._cameraDir.getCameraPosition() && this._scene.camera.position.copy(manualPos);
+          this._scene.camera.lookAt(rx, visualCenterY, rz);
+        } else if (blend.weight > 0.01) {
+          // Blending — interpolate between cinematic and manual positions
+          const cinematicTarget = this._cameraDir.getCinematicTarget(
+            state.phase,
+            state.time,
+            rocketState,
+          );
+          if (cinematicTarget) {
+            const smoothWeight = blend.weight;
+            const blendedX = cinematicTarget.x + (manualPos.x - cinematicTarget.x) * smoothWeight;
+            const blendedY = cinematicTarget.y + (manualPos.y - cinematicTarget.y) * smoothWeight;
+            const blendedZ = cinematicTarget.z + (manualPos.z - cinematicTarget.z) * smoothWeight;
+            this._scene.camera.position.set(blendedX, blendedY, blendedZ);
+          } else {
+            this._scene.camera.position.copy(manualPos);
+          }
+          this._scene.camera.lookAt(rx, visualCenterY, rz);
+
+          // Keep prevPos in sync for cinematic smoothing on return
+          this._cameraDir.syncPrevPosition(this._scene.camera.position);
+        } else {
+          // Fully cinematic — use normal update path
+          this._cameraDir.update(state.phase, state.time, rocketState);
+        }
+      }
+
+      // Update mode indicator
+      const blend2 = this._manualCamera.getBlendState();
+      if (blend2.weight >= 0.99) {
+        this._modeIndicator.className = 'camera-mode active';
+        this._modeIndicator.setAttribute(
+          'aria-label',
+          'Camera mode: manual orbit — release to return to cinematic follow',
+        );
+      } else {
+        this._modeIndicator.className = 'camera-mode';
+        this._modeIndicator.setAttribute('aria-label', 'Camera mode: cinematic follow');
+      }
     }
 
     // Resize post-processing if viewport changed
@@ -485,6 +560,7 @@ class App {
     this._flame.dispose();
     this._scene.renderer.dispose();
     this._audio.destroy();
+    this._manualCamera.destroy();
   }
 }
 

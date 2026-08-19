@@ -27,7 +27,12 @@ export default [
         performance: 'readonly',
         HTMLElement: 'readonly',
         HTMLButtonElement: 'readonly',
+        HTMLCanvasElement: 'readonly',
         KeyboardEvent: 'readonly',
+        MouseEvent: 'readonly',
+        Touch: 'readonly',
+        TouchEvent: 'readonly',
+        WheelEvent: 'readonly',
         ResizeObserver: 'readonly',
         URLSearchParams: 'readonly',
         // Web Audio API types

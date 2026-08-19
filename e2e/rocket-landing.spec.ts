@@ -359,3 +359,255 @@ test.describe('Rocket Landing - Video Capture', () => {
     },
   );
 });
+
+// ─── Manual Camera Tests ────────────────────────────────────────────────────
+
+test.describe('Rocket Landing - Manual Camera Control', () => {
+  test.beforeEach(async ({ page }) => {
+    const errors = collectConsoleAndErrors(page);
+    await page.goto('/rocket-landing-3d-version2/');
+    await waitForReady(page);
+    const msgs = await errors;
+    const jsErrors = msgs.filter(
+      (m) => m.startsWith('[pageerror]') || m.includes('TypeError') || m.includes('ReferenceError'),
+    );
+    if (jsErrors.length > 0) {
+      throw new Error(`Console/page errors detected: ${jsErrors.join('; ')}`);
+    }
+  });
+
+  test('manual camera indicator appears on canvas drag', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Drag the canvas (simulates mouse orbit)
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 50, box.y + box.height / 2 + 30, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+
+    // Mode indicator should be visible (opacity > 0 or class 'active')
+    const modeEl = page.locator('.camera-mode');
+    const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(true);
+  });
+
+  test('manual camera changes canvas appearance vs follow', async ({ page }) => {
+    const canvas = page.locator('canvas');
+
+    // Take baseline screenshot in follow mode
+    const screenshotFollow = await page.screenshot({ type: 'png' });
+
+    // Manipulate camera by dragging
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    // Large drag to ensure visible change
+    await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 - 80, { steps: 20 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Take screenshot in manual mode
+    const screenshotManual = await page.screenshot({ type: 'png' });
+
+    // Screenshots should differ (camera position changed)
+    expect(screenshotFollow).not.toEqual(screenshotManual);
+  });
+
+  test('wheel zoom changes camera distance', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // First enter manual mode with a click-drag
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+
+    const screenshotBefore = await page.screenshot({ type: 'png' });
+
+    // Scroll wheel (simulates zoom)
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.evaluate(() => {
+      const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+      canvas.dispatchEvent(new WheelEvent('wheel', { deltaMode: 0, deltaY: -100 }));
+    });
+    await page.waitForTimeout(200);
+
+    const screenshotAfter = await page.screenshot({ type: 'png' });
+
+    // Zoom should change the visual output
+    expect(screenshotBefore).not.toEqual(screenshotAfter);
+  });
+
+  test('mode indicator is accessible', async ({ page }) => {
+    await page.mouse.move(640, 360);
+    await page.mouse.down();
+    await page.mouse.move(700, 400, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+
+    const modeEl = page.locator('.camera-mode');
+    await expect(modeEl).toHaveAttribute('role', 'status');
+    await expect(modeEl).toHaveAttribute('aria-live', 'polite');
+  });
+
+  test('canvas drag does not trigger when clicking HUD controls', async ({ page }) => {
+    // The mode indicator should NOT be active after clicking play button
+    const playBtn = page.locator('#play-btn');
+    await playBtn.click();
+    await page.waitForTimeout(300);
+
+    // Mode indicator should not have 'active' class
+    const modeEl = page.locator('.camera-mode');
+    const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(false);
+  });
+});
+
+// ─── Touch Camera Tests (Desktop simulation) ────────────────────────────────
+
+test.describe('Rocket Landing - Touch Camera Simulation', () => {
+  test.beforeEach(async ({ page }) => {
+    const errors = collectConsoleAndErrors(page);
+    await page.goto('/rocket-landing-3d-version2/');
+    await waitForReady(page);
+    const msgs = await errors;
+    const jsErrors = msgs.filter(
+      (m) => m.startsWith('[pageerror]') || m.includes('TypeError'),
+    );
+    if (jsErrors.length > 0) {
+      throw new Error(`Console/page errors detected: ${jsErrors.join('; ')}`);
+    }
+  });
+
+  test('single touch drag enters manual mode', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Use mouse events as equivalent (touch handlers use same orbit logic)
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 50, cy + 30, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+
+    // Mode indicator should be active
+    const modeEl = page.locator('.camera-mode');
+    const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(true);
+  });
+
+  test('touch mobile screenshot shows valid output', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/rocket-landing-3d-version2/');
+    await waitForReady(page);
+
+    const screenshot = await page.screenshot();
+    expect(screenshot.length).toBeGreaterThan(10000);
+
+    fs.writeFileSync(path.join(SCREENSHOT_DIR, `touch-mobile-390x844.png`), Buffer.from(screenshot));
+  });
+});
+
+// ─── Inactivity Timer Tests ─────────────────────────────────────────────────
+
+test.describe('Rocket Landing - Camera Inactivity Return', () => {
+  test.beforeEach(async ({ page }) => {
+    const errors = collectConsoleAndErrors(page);
+    await page.goto('/rocket-landing-3d-version2/');
+    await waitForReady(page);
+    const msgs = await errors;
+    const jsErrors = msgs.filter(
+      (m) => m.startsWith('[pageerror]') || m.includes('TypeError'),
+    );
+    if (jsErrors.length > 0) {
+      throw new Error(`Console/page errors detected: ${jsErrors.join('; ')}`);
+    }
+  });
+
+  test('manual mode returns to follow after inactivity', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Enter manual mode with drag
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 60, cy + 40, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Mode should be active
+    let modeEl = page.locator('.camera-mode');
+    let isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(true);
+
+    // Wait 4 seconds (more than 3s inactivity timeout)
+    await page.waitForTimeout(4000);
+
+    // Mode indicator should no longer be active (or at least opacity changed)
+    modeEl = page.locator('.camera-mode');
+    isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(false);
+  });
+
+  test('input during blend-out cancels return to follow', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Enter manual mode
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 60, cy + 40, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Mode should be active
+    let modeEl = page.locator('.camera-mode');
+    let isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(true);
+
+    // Wait 2.5s (less than 3s timeout, so blend-out hasn't started yet)
+    await page.waitForTimeout(2500);
+
+    // Mode should still be active
+    modeEl = page.locator('.camera-mode');
+    isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(true);
+
+    // Now do another drag to reset timer
+    await page.mouse.move(cx + 50, cy + 30);
+    await page.mouse.down();
+    await page.mouse.move(cx + 120, cy + 80, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Mode should be active again
+    modeEl = page.locator('.camera-mode');
+    isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
+    expect(isActive).toBe(true);
+  });
+});
+

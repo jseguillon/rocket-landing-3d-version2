@@ -254,6 +254,111 @@ export class CameraDirector {
     this._prevPos.copy(pos);
     this._firstFrame = false;
   }
+
+  /** Get current camera position (for manual mode sync). */
+  getCameraPosition(): THREE.Vector3 | null {
+    return this._camera.position.clone();
+  }
+
+  /** Compute the cinematic target position for a given phase/time/rocket state, without applying it. */
+  getCinematicTarget(
+    phase: PhaseName,
+    time: number,
+    rocketState: RocketState,
+  ): THREE.Vector3 | null {
+    const [rx, ry, rz] = rocketState.position;
+    const visualCenterY = ry + ROCKET_CENTER_OFFSET;
+
+    let targetPos: THREE.Vector3;
+
+    switch (phase) {
+      case 'approach': {
+        const p = clamp(time / 5, 0, 1);
+        const dist = this._frameDistance(lerp(0.32, 0.28, easeInOutCubic(p)));
+        const heightOffRocket = lerp(34, 22, easeInOutCubic(p));
+        targetPos = new THREE.Vector3(
+          lerp(25, 15, p) + rx * 0.4,
+          visualCenterY + heightOffRocket,
+          dist,
+        );
+        break;
+      }
+      case 'descent': {
+        const p = clamp((time - 5) / 7, 0, 1);
+        const dist = this._frameDistance(lerp(0.36, 0.32, easeInOutCubic(p)));
+        const heightOffRocket = lerp(22, 8, easeInOutCubic(p));
+        targetPos = new THREE.Vector3(
+          rx * 0.6 + Math.sin(time * 0.3) * 2,
+          visualCenterY + heightOffRocket,
+          dist,
+        );
+        break;
+      }
+      case 'entry': {
+        const p = clamp((time - 12) / 8, 0, 1);
+        const dist = this._frameDistance(lerp(0.42, 0.38, easeInQuad(p)));
+        const heightOffRocket = lerp(8, 5, easeInQuad(p));
+        targetPos = new THREE.Vector3(
+          rx * 0.7 + Math.sin(time * 0.5) * 2.5,
+          visualCenterY - 1 + heightOffRocket,
+          dist,
+        );
+        break;
+      }
+      case 'landing-burn': {
+        const p = clamp((time - 20) / 7, 0, 1);
+        const dist = this._frameDistance(lerp(0.58, 0.54, easeInOutCubic(p)));
+        const heightOffRocket = lerp(5, 3, easeInOutCubic(p));
+        targetPos = new THREE.Vector3(
+          rx * 0.8 + Math.sin(time * 0.4) * 1.5,
+          visualCenterY - 2 + heightOffRocket,
+          dist,
+        );
+        break;
+      }
+      case 'leg-deploy': {
+        const p = clamp((time - 27) / 4, 0, 1);
+        const dist = this._frameDistance(lerp(0.72, 0.68, easeOutQuad(p)));
+        const heightOffRocket = lerp(5, 3, easeOutQuad(p));
+        targetPos = new THREE.Vector3(
+          rx * 1.0 + Math.sin(time * 0.6) * 0.8,
+          visualCenterY - 2 + heightOffRocket,
+          dist,
+        );
+        break;
+      }
+      case 'touchdown': {
+        const p = clamp((time - 31) / 4, 0, 1);
+        const dist = this._frameDistance(lerp(0.68, 0.62, easeOutQuad(p)));
+        const heightOffRocket = lerp(4, 2.5, easeOutQuad(p));
+        targetPos = new THREE.Vector3(
+          rx + Math.sin(time * 0.8) * 0.5,
+          visualCenterY - 1 + heightOffRocket,
+          dist,
+        );
+        break;
+      }
+      case 'hero': {
+        const p = clamp((time - 35) / 5, 0, 1);
+        const orbitAngle = time * 0.08;
+        const dist = this._frameDistance(lerp(0.65, 0.6, easeOutQuad(p)));
+        const heightOffRocket = lerp(4, 2.5, easeOutQuad(p));
+        targetPos = new THREE.Vector3(
+          rx + Math.cos(orbitAngle) * dist,
+          visualCenterY - 1 + heightOffRocket,
+          rz + Math.sin(orbitAngle) * dist,
+        );
+        break;
+      }
+    }
+
+    return targetPos;
+  }
+
+  /** Sync previous position for smooth cinematic re-entry after manual mode. */
+  syncPrevPosition(pos: THREE.Vector3): void {
+    this._prevPos.copy(pos);
+  }
 }
 
 function easeInOutCubic(x: number): number {
