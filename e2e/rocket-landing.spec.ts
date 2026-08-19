@@ -313,7 +313,9 @@ test.describe('Rocket Landing - Video Capture', () => {
       // Collect all console/page errors — fail the test if any are present
       const errors: string[] = [];
       page.on('console', (msg) => {
-        errors.push(`[${msg.type()}] ${msg.text()}`);
+        if (msg.type() === 'error') {
+          errors.push(`[${msg.type()}] ${msg.text()}`);
+        }
       });
       page.on('pageerror', (err) => {
         errors.push(`[pageerror] ${err.message}`);
