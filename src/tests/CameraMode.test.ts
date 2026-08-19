@@ -177,6 +177,53 @@ describe('ManualCameraController', () => {
       expect(controller.getBlendState().mode).toBe('manual');
       expect(controller.getBlendState().weight).toBe(1);
     });
+
+    it('blend-out weight decreases monotonically every frame from start through >800ms', () => {
+      // Simulate blend-out starting
+      m(controller)._mode = 'returning';
+      m(controller)._weight = 1;
+      m(controller)._blendFromWeight = 1;
+      const startTime = 1000;
+      m(controller)._blendStart = startTime;
+
+      // Save original performance.now
+      const origNow = performance.now.bind(performance);
+      (performance as unknown as Record<string, unknown>).now = () => startTime;
+
+      const weights: number[] = [];
+      let currentMode: string = 'returning';
+      let currentWeight = 1;
+      const FRAME_MS = 16;
+      const TOTAL_FRAMES = Math.ceil((800 + 100) / FRAME_MS); // ~57 frames (900ms total)
+
+      for (let i = 0; i < TOTAL_FRAMES; i++) {
+        const now = startTime + i * FRAME_MS;
+        controller.updateFrame(now);
+        const bs = controller.getBlendState();
+        weights.push(bs.weight);
+        currentMode = bs.mode;
+        currentWeight = bs.weight;
+
+        if (i > 0) {
+          // Weight must be strictly decreasing until it reaches 0
+          if (currentWeight > 0.01) {
+            expect(bs.weight).toBeLessThan(weights[i - 1]);
+          }
+        }
+      }
+
+      // After >800ms, should have returned to follow with weight 0
+      expect(currentMode).toBe('follow');
+      expect(currentWeight).toBe(0);
+
+      // Verify we captured values well below .99 (mid-return weights)
+      const midIndex = Math.floor(TOTAL_FRAMES * 0.5);
+      expect(weights[midIndex]).toBeLessThan(0.6);
+      expect(weights[midIndex]).toBeGreaterThan(0.3);
+
+      // Restore performance.now
+      (performance as unknown as Record<string, unknown>).now = origNow;
+    });
   });
 
   describe('spherical coordinate position computation', () => {
@@ -402,6 +449,89 @@ describe('ManualCameraController', () => {
 
       const pos = controller.getPosition();
       expect(pos.x).not.toBeNaN();
+    });
+  });
+
+  describe('mousemove handler', () => {
+    it('mousemove during drag changes theta and phi', () => {
+      // Enter manual mode via internal state manipulation
+      m(controller)._mode = 'manual';
+      m(controller)._weight = 1;
+      m(controller)._isDragging = true;
+      m(controller)._dragStartX = 0;
+      m(controller)._dragStartY = 0;
+      m(controller)._dragStartTheta = 0;
+      m(controller)._dragStartPhi = Math.PI / 6;
+      controller.updateFocusPoint(0, 10, 0);
+
+      const initialTheta = m(controller)._theta;
+      const initialPhi = m(controller)._phi;
+
+      // Simulate mousemove by calling the handler directly with a synthetic event
+      const moveHandler = (controller as unknown as Record<string, (e: MouseEvent) => void>)
+        ._mouseMoveHandler;
+      const mockEvent = new MouseEvent('mousemove', { clientX: 100, clientY: 50 }) as MouseEvent;
+      moveHandler(mockEvent);
+
+      // Theta and phi should have changed from initial values
+      expect(m(controller)._theta).not.toBe(initialTheta);
+      expect(m(controller)._phi).not.toBe(initialPhi);
+
+      // Theta should be positive (dragged right)
+      expect(n(controller, '_theta')).toBeGreaterThan(0);
+    });
+  });
+
+  describe('touchend handler', () => {
+    it('touchend resets drag state and starts inactivity timer', () => {
+      // Enter manual mode via touch with dragging active
+      m(controller)._mode = 'manual';
+      m(controller)._weight = 1;
+      m(controller)._isDragging = true;
+
+      const origSetTimeout = globalThis.setTimeout;
+      let timerFired = false;
+      globalThis.setTimeout = ((fn: () => void) => {
+        timerFired = true;
+        fn();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }) as typeof setTimeout;
+
+      // Simulate touchend by calling the handler directly (no event param)
+      const endHandler = (controller as unknown as Record<string, () => void>)._touchEndHandler;
+      endHandler();
+
+      expect(m(controller)._isDragging).toBe(false);
+      expect(timerFired).toBe(true);
+
+      globalThis.setTimeout = origSetTimeout;
+    });
+
+    it('touchmove during drag changes theta from TouchEvent', () => {
+      // Enter manual mode via internal state to simulate touch drag
+      m(controller)._mode = 'manual';
+      m(controller)._weight = 1;
+      m(controller)._isDragging = true;
+      m(controller)._dragStartX = 0;
+      m(controller)._dragStartY = 0;
+      m(controller)._dragStartTheta = 0;
+      m(controller)._dragStartPhi = Math.PI / 6;
+      controller.updateFocusPoint(0, 10, 0);
+
+      const initialTheta = n(controller, '_theta');
+
+      // Create a mock TouchEvent with synthetic touches array
+      const touchMoveHandler = (controller as unknown as Record<string, (e: TouchEvent) => void>)
+        ._touchMoveHandler;
+      const mockTouch = { identifier: 0, clientX: 100, clientY: 130 } as unknown as Touch;
+      const mockEvent = { touches: [mockTouch], preventDefault: () => {} } as unknown as TouchEvent;
+
+      // Invoke the handler directly to verify theta changes from touch drag
+      touchMoveHandler(mockEvent);
+
+      // Theta should have changed from initial (dragged right by 100px)
+      expect(n(controller, '_theta')).not.toBe(initialTheta);
+      expect(n(controller, '_theta')).toBeGreaterThan(0);
     });
   });
 });

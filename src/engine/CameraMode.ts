@@ -90,7 +90,7 @@ export class ManualCameraController {
 
   // Event listener refs for cleanup (initialized as no-ops, assigned in _setupEventListeners)
   private _mouseDownHandler: (e: MouseEvent) => void = () => {};
-  private _mouseMoveHandler: () => void = () => {};
+  private _mouseMoveHandler: (e: MouseEvent) => void = () => {};
   private _mouseUpHandler: () => void = () => {};
   private _globalMouseUpHandler: (() => void) | null = null;
   private _wheelHandler: (e: WheelEvent) => void = () => {};
@@ -209,7 +209,9 @@ export class ManualCameraController {
       if (e.button !== 0) return;
       this._onMouseDown(e);
     };
-    this._mouseMoveHandler = () => {};
+    this._mouseMoveHandler = (e: MouseEvent) => {
+      this._onMouseMove(e);
+    };
     this._mouseUpHandler = () => {};
     this._wheelHandler = (e: WheelEvent) => {
       e.preventDefault();
@@ -221,15 +223,24 @@ export class ManualCameraController {
     this._touchMoveHandler = (e: TouchEvent) => {
       this._onTouchMove(e);
     };
-    this._touchEndHandler = () => {};
+    this._touchEndHandler = () => {
+      this._onTouchEnd();
+    };
 
     if (this._mouseDownHandler) this._canvas.addEventListener('mousedown', this._mouseDownHandler);
+    if (this._mouseMoveHandler) this._canvas.addEventListener('mousemove', this._mouseMoveHandler);
     if (this._wheelHandler)
       this._canvas.addEventListener('wheel', this._wheelHandler, { passive: false });
     if (this._touchStartHandler)
       this._canvas.addEventListener('touchstart', this._touchStartHandler, { passive: false });
     if (this._touchMoveHandler)
       this._canvas.addEventListener('touchmove', this._touchMoveHandler, { passive: false });
+
+    // Register touchend/touchcancel for cleanup on touch completion
+    if (this._touchEndHandler) {
+      this._canvas.addEventListener('touchend', this._touchEndHandler);
+      this._canvas.addEventListener('touchcancel', this._touchEndHandler);
+    }
 
     // Global mouseup to reset drag state — always active
     this._globalMouseUpHandler = () => {
@@ -345,10 +356,6 @@ export class ManualCameraController {
     }
 
     e.preventDefault();
-    if (this._touchEndHandler) {
-      this._canvas.addEventListener('touchend', this._touchEndHandler);
-      this._canvas.addEventListener('touchcancel', this._touchEndHandler);
-    }
   }
 
   private _onTouchMove(e: TouchEvent): void {
@@ -461,7 +468,7 @@ export class ManualCameraController {
 
   /** Call every frame to handle blend-out progress and angle smoothing */
   updateFrame(now: number): void {
-    if (this._mode === 'returning' && this._weight >= 0.99) {
+    if (this._mode === 'returning' && this._weight > 0) {
       const elapsed = now - this._blendStart;
       const t = easeInOutCubic(clamp(elapsed / BLEND_OUT_DURATION, 0, 1));
       this._weight = this._blendFromWeight * (1 - t);
@@ -496,6 +503,9 @@ export class ManualCameraController {
 
     if (this._mouseDownHandler) {
       this._canvas.removeEventListener('mousedown', this._mouseDownHandler);
+    }
+    if (this._mouseMoveHandler) {
+      this._canvas.removeEventListener('mousemove', this._mouseMoveHandler);
     }
     if (this._wheelHandler) {
       this._canvas.removeEventListener('wheel', this._wheelHandler);

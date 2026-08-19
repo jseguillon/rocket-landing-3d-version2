@@ -318,6 +318,7 @@ class App {
         setCheckpoint: () => {},
         play: () => {},
         pause: () => {},
+        getCameraState: () => null,
         isReady: false,
       };
     }
@@ -388,6 +389,7 @@ class App {
         if (!this._isReady) return;
         this._timeline.pause();
       },
+      getCameraState: () => this._getCameraState(),
     };
     // Update isReady after assignment so it reflects initialization status
     api.isReady = true;
@@ -544,7 +546,7 @@ class App {
         this._modeIndicator.className = 'camera-mode active';
         this._modeIndicator.setAttribute(
           'aria-label',
-          'Camera mode: manual orbit — release to return to cinematic follow',
+          'Camera mode: manual orbit — returns after 3 seconds of inactivity',
         );
       } else if (blend2.mode === 'returning') {
         this._modeIndicator.className = 'camera-mode returning';

@@ -67,6 +67,14 @@ export const TOTAL_DURATION = 40; // seconds
 
 // ─── QA API Interface ───────────────────────────────────────────────────────
 
+export interface CameraState {
+  mode: 'follow' | 'manual' | 'returning';
+  weight: number;
+  theta: number;
+  phi: number;
+  radius: number;
+}
+
 export interface RocketQAPI {
   isReady: boolean;
   getTime: () => number | null;
@@ -74,6 +82,7 @@ export interface RocketQAPI {
   setCheckpoint: (phase: PhaseName) => void;
   play: () => void;
   pause: () => void;
+  getCameraState: () => CameraState | null;
 }
 
 // ─── QA / Determinism API ──────────────────────────────────────────────────
