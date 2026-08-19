@@ -43,6 +43,19 @@ export class TimelineEngine {
   /** Internal: whether timeline is in the finished state (for main.ts freeze detection) */
   _finishedValue = false;
 
+  /** Internal: fixed time to freeze timeline at — overrides all updates when set */
+  private _frozenTime: number | null = null;
+
+  /** Accessor for QA/test: whether timeline is currently frozen */
+  get _isFrozen(): boolean {
+    return this._frozenTime !== null;
+  }
+
+  /** Accessor for QA/test: paused time value */
+  get _pausedTimeValue(): number | null {
+    return this._pausedTime;
+  }
+
   constructor(seed: number = 42, qaPercent?: number) {
     this._seed = seed;
     this._qaPercentValue = qaPercent;
@@ -50,6 +63,31 @@ export class TimelineEngine {
       this._time = (this._qaPercentValue / 100) * TOTAL_DURATION;
       this._playing = false;
       this._finishedValue = true;
+    }
+  }
+
+  /** Freeze timeline at a specific time in seconds — used for QA comparison pairs */
+  freezeAt(timeSeconds: number): void {
+    this._frozenTime = clamp(timeSeconds, 0, TOTAL_DURATION);
+    this._time = this._frozenTime;
+    // Frozen at end-of-animation → finished=true (hero shot).
+    // Frozen mid-flight → finished=false (paused, not mission-complete).
+    const atEnd = this._frozenTime >= TOTAL_DURATION;
+    this._playing = false;
+    this._finishedValue = atEnd;
+    this._pausedTime = this._time;
+    this._qaPercentValue = undefined;
+  }
+
+  /** Clear any freeze and optionally restore QA percent position */
+  unfreeze(qaPercent?: number): void {
+    this._frozenTime = null;
+    if (qaPercent !== undefined) {
+      this.setQAPercent(qaPercent);
+    } else {
+      this._playing = true;
+      this._finishedValue = false;
+      this._pausedTime = null;
     }
   }
 
@@ -73,8 +111,10 @@ export class TimelineEngine {
     return clamp(this._time / TOTAL_DURATION, 0, 1);
   }
 
-  /** Set a deterministic QA position (0..100 percentage) */
+  /** Set a deterministic QA position (0..100 percentage) — clears freeze */
   setQAPercent(pct: number): void {
+    // Clear any active freeze so QA percent can be applied normally
+    this._frozenTime = null;
     this._qaPercentValue = clamp(pct, 0, 100);
     this._time = (this._qaPercentValue / 100) * TOTAL_DURATION;
     this._playing = false;
@@ -82,8 +122,10 @@ export class TimelineEngine {
     this._pausedTime = null;
   }
 
-  /** Start/resume playing */
+  /** Start/resume playing — clears any freeze so timeline advances */
   play(): void {
+    // Clear freeze if active so timeline can advance
+    this._frozenTime = null;
     if (this._time >= TOTAL_DURATION) {
       this.reset();
       return;
@@ -110,8 +152,10 @@ export class TimelineEngine {
     }
   }
 
-  /** Reset to beginning and start playing */
+  /** Reset to beginning and start playing — clears any freeze */
   reset(): void {
+    // Clear freeze so timeline starts fresh
+    this._frozenTime = null;
     this._time = 0;
     this._playing = true;
     this._finishedValue = false;
@@ -123,6 +167,7 @@ export class TimelineEngine {
 
   /** Advance by delta seconds */
   update(dt: number): void {
+    if (this._frozenTime !== null) return;
     if (!this._playing || this._finishedValue || this._qaPercentValue !== undefined) return;
     this._time = Math.min(this._time + dt, TOTAL_DURATION);
     if (this._time >= TOTAL_DURATION) {

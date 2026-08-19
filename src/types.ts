@@ -83,6 +83,7 @@ export interface RocketQAPI {
   play: () => void;
   pause: () => void;
   getCameraState: () => CameraState | null;
+  getState: () => AppState | null;
 }
 
 // ─── QA / Determinism API ──────────────────────────────────────────────────

@@ -1,6 +1,27 @@
 import { test, expect, type Page } from '@playwright/test';
+import type { CDPSession } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+
+interface TouchPoint {
+  x: number;
+  y: number;
+  id: number;
+  radiusX?: number;
+  radiusY?: number;
+  force?: number;
+}
+
+async function dispatchTouch(
+  session: CDPSession,
+  type: 'touchStart' | 'touchMove' | 'touchEnd',
+  touchPoints: TouchPoint[],
+): Promise<void> {
+  await session.send('Input.dispatchTouchEvent', {
+    type,
+    touchPoints: type === 'touchEnd' ? [] : touchPoints,
+  });
+}
 
 // Declare __rocketQA on window for TypeScript
 declare global {
@@ -19,7 +40,33 @@ declare global {
         phi: number;
         radius: number;
       } | null;
-      _timeline?: { _qaPercentValue?: number };
+      getState: () => {
+        phase: string;
+        time: number;
+        duration: number;
+        playing: boolean;
+        muted: boolean;
+        rocketState: {
+          position: [number, number, number];
+          rotation: [number, number, number];
+          scale: [number, number, number];
+          engineActive: boolean;
+          engineThrust: number;
+          legDeployed: boolean;
+          legAngle: number;
+        };
+        telemetry: {
+          phase: string;
+          altitude: number;
+          velocity: number;
+          horizontalPosition: number;
+          verticalPosition: number;
+          progress: number;
+          engineThrust: number;
+          legDeployed: boolean;
+          timestamp: number;
+        };
+      } | null;
     };
   }
 }
@@ -35,7 +82,33 @@ interface CameraState {
 }
 
 function getCameraState(page: Page): Promise<CameraState | null> {
-  return page.evaluate((): CameraState | null => (window as unknown as Record<string, { getCameraState: () => CameraState | null }>).__rocketQA.getCameraState());
+  return page.evaluate((): CameraState | null =>
+    (
+      window as unknown as Record<string, { getCameraState: () => CameraState | null }>
+    ).__rocketQA.getCameraState(),
+  );
+}
+
+function getAppState(page: Page): Promise<{
+  phase: string;
+  time: number;
+  telemetry: { altitude: number; velocity: number; engineThrust: number };
+} | null> {
+  return page.evaluate((): any => {
+    const api = window.__rocketQA;
+    if (!api || !api.isReady) return null;
+    const state = api.getState();
+    if (!state) return null;
+    return {
+      phase: state.phase,
+      time: state.time,
+      telemetry: {
+        altitude: state.telemetry.altitude,
+        velocity: state.telemetry.velocity,
+        engineThrust: state.telemetry.engineThrust,
+      },
+    };
+  });
 }
 const CHECKPOINTS = [
   { name: 'approach', qa: 5, label: 'Orbital Approach' },
@@ -67,7 +140,9 @@ async function waitForReady(page: Page): Promise<void> {
   await expect(page.locator('.loading-screen')).toBeHidden({ timeout: 15000 });
   await expect(page.locator('canvas')).toBeVisible({ timeout: 10000 });
   await page.waitForFunction(
-    () => typeof window.__rocketQA !== 'undefined' && (window as unknown as { __rocketQA: { isReady: boolean } }).__rocketQA.isReady === true,
+    () =>
+      typeof window.__rocketQA !== 'undefined' &&
+      (window as unknown as { __rocketQA: { isReady: boolean } }).__rocketQA.isReady === true,
     { timeout: 10000 },
   );
 }
@@ -82,7 +157,8 @@ test.describe('Rocket Landing - Desktop Visual Tests', () => {
     const msgs = await errors;
     if (msgs.length > 0) {
       const jsErrors = msgs.filter(
-        (m) => m.startsWith('[pageerror]') || m.includes('TypeError') || m.includes('ReferenceError'),
+        (m) =>
+          m.startsWith('[pageerror]') || m.includes('TypeError') || m.includes('ReferenceError'),
       );
       if (jsErrors.length > 0) {
         throw new Error(`Console/page errors detected: ${jsErrors.join('; ')}`);
@@ -132,11 +208,15 @@ test.describe('Rocket Landing - Desktop Visual Tests', () => {
   }
 
   test('replay button resets timeline', async ({ page }) => {
-    const timeBefore = await page.evaluate(() => (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime());
+    const timeBefore = await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime(),
+    );
     await page.click('#replay-btn');
     await page.waitForTimeout(500);
     // Timeline should have reset to near zero
-    const timeAfter = await page.evaluate(() => (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime());
+    const timeAfter = await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime(),
+    );
     expect(timeAfter).not.toBeNull();
     expect(timeAfter! < 2).toBe(true);
     expect(timeBefore).not.toBe(timeAfter);
@@ -160,28 +240,42 @@ test.describe('Rocket Landing - Desktop Visual Tests', () => {
 
     // Advance timeline a bit
     await page.waitForTimeout(2000);
-    const timeBeforePause = await page.evaluate(() => (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime());
+    const timeBeforePause = await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime(),
+    );
     expect(timeBeforePause).not.toBeNull();
     expect(timeBeforePause! > 0).toBe(true);
 
     // Pause
-    await page.evaluate(() => (window as unknown as { __rocketQA: { pause: () => void } }).__rocketQA.pause());
-    const timePaused = await page.evaluate(() => (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime());
+    await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { pause: () => void } }).__rocketQA.pause(),
+    );
+    const timePaused = await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime(),
+    );
 
     // Advance more time — should not change during pause
     await page.waitForTimeout(2000);
-    const timeAfterPause = await page.evaluate(() => (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime());
+    const timeAfterPause = await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime(),
+    );
     expect(timeAfterPause).not.toBeNull();
     expect(timePaused).not.toBeNull();
     expect(Math.abs(timeAfterPause! - timePaused!)).toBeLessThan(1);
 
     // Resume
-    await page.evaluate(() => (window as unknown as { __rocketQA: { play: () => void } }).__rocketQA.play());
-    const timeBeforeResume = await page.evaluate(() => (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime());
+    await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { play: () => void } }).__rocketQA.play(),
+    );
+    const timeBeforeResume = await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime(),
+    );
 
     // Advance more — should now change
     await page.waitForTimeout(1500);
-    const timeAfterResume = await page.evaluate(() => (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime());
+    const timeAfterResume = await page.evaluate(() =>
+      (window as unknown as { __rocketQA: { getTime: () => number | null } }).__rocketQA.getTime(),
+    );
     expect(timeAfterResume).not.toBeNull();
     expect(timeBeforeResume).not.toBeNull();
     expect(timeAfterResume! > timeBeforeResume!).toBe(true);
@@ -311,72 +405,69 @@ test.describe('Rocket Landing - QA Determinism', () => {
 // ─── Natural Video Capture Test ────────────────────────────────────────────
 
 test.describe('Rocket Landing - Video Capture', () => {
-  test(
-    'captures full 40s animation at 1280x720',
-    async ({ browser }) => {
-      test.setTimeout(65000); // Allow up to 65s for the full animation
+  test('captures full 40s animation at 1280x720', async ({ browser }) => {
+    test.setTimeout(65000); // Allow up to 65s for the full animation
 
-      const qaArtifactsDir = path.join(process.cwd(), 'qa-artifacts');
-      fs.mkdirSync(qaArtifactsDir, { recursive: true });
+    const qaArtifactsDir = path.join(process.cwd(), 'qa-artifacts');
+    fs.mkdirSync(qaArtifactsDir, { recursive: true });
 
-      const context = await browser.newContext({
-        viewport: { width: 1280, height: 720 },
-        recordVideo: {
-          dir: qaArtifactsDir,
-          size: { width: 1280, height: 720 },
-        },
-      });
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      recordVideo: {
+        dir: qaArtifactsDir,
+        size: { width: 1280, height: 720 },
+      },
+    });
 
-      const page = await context.newPage();
+    const page = await context.newPage();
 
-      // Collect all console/page errors — fail the test if any are present
-      const errors: string[] = [];
-      page.on('console', (msg) => {
-        if (msg.type() === 'error') {
-          errors.push(`[${msg.type()}] ${msg.text()}`);
-        }
-      });
-      page.on('pageerror', (err) => {
-        errors.push(`[pageerror] ${err.message}`);
-      });
-
-      await page.goto('/rocket-landing-3d-version2/');
-      await waitForReady(page);
-
-      // Record the video handle before waiting so we can retrieve it after page close
-      const video = page.video();
-      if (!video) {
-        throw new Error('Video capture failed: page.video() returned null');
+    // Collect all console/page errors — fail the test if any are present
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        errors.push(`[${msg.type()}] ${msg.text()}`);
       }
+    });
+    page.on('pageerror', (err) => {
+      errors.push(`[pageerror] ${err.message}`);
+    });
 
-      // Wait in real wall time for the full ~40s animation to play naturally
-      const startT = Date.now();
-      await page.waitForTimeout(41000);
-      const elapsed = (Date.now() - startT) / 1000;
+    await page.goto('/rocket-landing-3d-version2/');
+    await waitForReady(page);
 
-      // Assert real elapsed wall time >= 40s (allow small timing variance)
-      expect(elapsed).toBeGreaterThanOrEqual(39.5);
+    // Record the video handle before waiting so we can retrieve it after page close
+    const video = page.video();
+    if (!video) {
+      throw new Error('Video capture failed: page.video() returned null');
+    }
 
-      // Close page first to finalize video file, then close context
-      await page.close();
-      const finalizedPath = await video.path();
-      await context.close();
+    // Wait in real wall time for the full ~40s animation to play naturally
+    const startT = Date.now();
+    await page.waitForTimeout(41000);
+    const elapsed = (Date.now() - startT) / 1000;
 
-      // Copy Playwright's randomly named video to the expected destination
-      const dest = path.join(qaArtifactsDir, 'demo.webm');
-      fs.cpSync(finalizedPath, dest);
+    // Assert real elapsed wall time >= 40s (allow small timing variance)
+    expect(elapsed).toBeGreaterThanOrEqual(39.5);
 
-      // Assert file exists and has content >300KB (307200 bytes)
-      expect(fs.existsSync(dest)).toBe(true);
-      const stats = fs.statSync(dest);
-      expect(stats.size).toBeGreaterThan(307200);
+    // Close page first to finalize video file, then close context
+    await page.close();
+    const finalizedPath = await video.path();
+    await context.close();
 
-      // Fail the test if any console/page errors were collected
-      if (errors.length > 0) {
-        throw new Error(`Video capture failed: ${errors.join('; ')}`);
-      }
-    },
-  );
+    // Copy Playwright's randomly named video to the expected destination
+    const dest = path.join(qaArtifactsDir, 'demo.webm');
+    fs.cpSync(finalizedPath, dest);
+
+    // Assert file exists and has content >300KB (307200 bytes)
+    expect(fs.existsSync(dest)).toBe(true);
+    const stats = fs.statSync(dest);
+    expect(stats.size).toBeGreaterThan(307200);
+
+    // Fail the test if any console/page errors were collected
+    if (errors.length > 0) {
+      throw new Error(`Video capture failed: ${errors.join('; ')}`);
+    }
+  });
 });
 
 // ─── Manual Camera Tests ────────────────────────────────────────────────────
@@ -493,56 +584,6 @@ test.describe('Rocket Landing - Manual Camera Control', () => {
   });
 });
 
-// ─── Touch Camera Tests (Desktop simulation) ────────────────────────────────
-
-test.describe('Rocket Landing - Touch Camera Simulation', () => {
-  test.beforeEach(async ({ page }) => {
-    const errors = collectConsoleAndErrors(page);
-    await page.goto('/rocket-landing-3d-version2/');
-    await waitForReady(page);
-    const msgs = await errors;
-    const jsErrors = msgs.filter(
-      (m) => m.startsWith('[pageerror]') || m.includes('TypeError'),
-    );
-    if (jsErrors.length > 0) {
-      throw new Error(`Console/page errors detected: ${jsErrors.join('; ')}`);
-    }
-  });
-
-  test('single touch drag enters manual mode', async ({ page }) => {
-    const canvas = page.locator('canvas');
-    const box = await canvas.boundingBox();
-    expect(box).not.toBeNull();
-    if (!box) return;
-
-    // Use mouse events as equivalent (touch handlers use same orbit logic)
-    const cx = box.x + box.width / 2;
-    const cy = box.y + box.height / 2;
-
-    await page.mouse.move(cx, cy);
-    await page.mouse.down();
-    await page.mouse.move(cx + 50, cy + 30, { steps: 10 });
-    await page.mouse.up();
-    await page.waitForTimeout(200);
-
-    // Mode indicator should be active
-    const modeEl = page.locator('.camera-mode');
-    const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
-    expect(isActive).toBe(true);
-  });
-
-  test('touch mobile screenshot shows valid output', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/rocket-landing-3d-version2/');
-    await waitForReady(page);
-
-    const screenshot = await page.screenshot();
-    expect(screenshot.length).toBeGreaterThan(10000);
-
-    fs.writeFileSync(path.join(SCREENSHOT_DIR, `touch-mobile-390x844.png`), Buffer.from(screenshot));
-  });
-});
-
 // ─── Inactivity Timer Tests (using read-only QA camera state, frozen timeline) ─
 
 test.describe('Rocket Landing - Camera Inactivity Return', () => {
@@ -551,26 +592,21 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     await page.goto('/rocket-landing-3d-version2/');
     await waitForReady(page);
     const msgs = await errors;
-    const jsErrors = msgs.filter(
-      (m) => m.startsWith('[pageerror]') || m.includes('TypeError'),
-    );
+    const jsErrors = msgs.filter((m) => m.startsWith('[pageerror]') || m.includes('TypeError'));
     if (jsErrors.length > 0) {
       throw new Error(`Console/page errors detected: ${jsErrors.join('; ')}`);
     }
   });
 
   test('manual mode is active just before 3s inactivity', async ({ page }) => {
-    // Pause timeline at hero checkpoint and clear QA freeze to enable manual camera
+    // Pause timeline at hero checkpoint — freezeAt sets _frozenTime, not _qaPercentValue
     await page.evaluate(() => {
       const api = window.__rocketQA;
       api.setCheckpoint('hero');
-      api.pause();
-      const tl = (window.__rocketQA._timeline as { _qaPercentValue?: number } | undefined);
-      if (tl) tl._qaPercentValue = undefined;
     });
 
-    // Wait for render loop to process the cleared state (manual camera reset during freeze)
-    await page.waitForTimeout(100);
+    // Wait for render loop to process the frozen state (manual camera still updates)
+    await page.waitForTimeout(200);
 
     const canvas = page.locator('canvas');
     const box = await canvas.boundingBox();
@@ -588,29 +624,15 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
 
     // Verify camera state via QA API — should be manual with weight ~1
     const camState = await getCameraState(page);
-
     expect(camState).not.toBeNull();
     expect(camState!.mode).toBe('manual');
     expect(camState!.weight).toBeGreaterThan(0.95);
 
-    // Screenshot: manual camera offset (timeline frozen at hero)
-    const screenshotManual = await page.screenshot();
-    fs.writeFileSync(path.join(SCREENSHOT_DIR, 'manual-camera-offset.png'), Buffer.from(screenshotManual));
-
-    // Mode should still be active at 2.5s (well before 3s timeout)
-    await page.waitForFunction(
-      () => {
-        const api = window.__rocketQA;
-        if (!api.isReady) return false;
-        const cam = api.getCameraState();
-        if (!cam) return false;
-        // Wait until we're past 2.5s of manual mode (still before 3s timeout)
-        return cam.mode === 'manual' && cam.weight > 0.95;
-      },
-      { timeout: 4000 },
-    );
+    // Wait for 2.5s (still below the 3s inactivity threshold) and verify we remain manual
+    await page.waitForTimeout(2500);
 
     const camState2 = await getCameraState(page);
+    // After 2.5s of inactivity (still < 3s), mode must still be manual, weight ~1
     expect(camState2!.mode).toBe('manual');
     expect(camState2!.weight).toBeGreaterThan(0.95);
   });
@@ -620,13 +642,10 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     await page.evaluate(() => {
       const api = window.__rocketQA;
       api.setCheckpoint('hero');
-      api.pause();
-      const tl = (window.__rocketQA._timeline as { _qaPercentValue?: number } | undefined);
-      if (tl) tl._qaPercentValue = undefined;
     });
 
-    // Wait for render loop to process the cleared state
-    await page.waitForTimeout(100);
+    // Wait for render loop to process the frozen state (manual camera still updates)
+    await page.waitForTimeout(200);
 
     const canvas = page.locator('canvas');
     const box = await canvas.boundingBox();
@@ -659,16 +678,112 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     const modeEl = page.locator('.camera-mode');
     const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
     expect(isActive).toBe(false);
-
-    // Screenshot: restored follow mode (timeline still frozen at hero — same as manual offset screenshot)
-    const screenshotFollow = await page.screenshot();
-    fs.writeFileSync(path.join(SCREENSHOT_DIR, 'manual-camera-restored-follow.png'), Buffer.from(screenshotFollow));
   });
 
+  test(
+    'authoritative comparison pair: manual offset vs restored follow at frozen checkpoint',
+    async ({ page }, testInfo) => {
+      // Freeze timeline at landing-burn (visually rich with engine flame + pad) so both screenshots
+      // show identical phase/altitude/telemetry — only camera state/framing differs.
+      await page.evaluate(() => {
+        const api = window.__rocketQA;
+        api.setCheckpoint('landing-burn');
+      });
+
+      await page.waitForTimeout(200);
+
+      const canvas = page.locator('canvas');
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+      if (!box) return;
+
+      // ── Step 1: Enter manual mode with drag — capture "offset" state ─────────
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      await page.mouse.move(cx + 80, cy + 60, { steps: 15 });
+      await page.mouse.up();
+      await page.waitForTimeout(300);
+
+      const camManual = await getCameraState(page);
+      expect(camManual).not.toBeNull();
+      expect(camManual!.mode).toBe('manual');
+      expect(camManual!.weight).toBeGreaterThan(0.95);
+
+      // Capture the authoritative QA snapshot: phase, time, telemetry (altitude, velocity, thrust)
+      const snapBefore = await getAppState(page);
+      expect(snapBefore).not.toBeNull();
+      expect(snapBefore!.phase).toBe('landing-burn');
+      expect(snapBefore!.time).toBeCloseTo(20, 1);
+
+      // Canonical screenshots (desktop only) — mobile uses unique names to avoid cross-project races
+      const screenshotManual = await page.screenshot();
+      const isDesktop = testInfo.project.name === 'desktop';
+      if (isDesktop) {
+        fs.writeFileSync(
+          path.join(SCREENSHOT_DIR, 'manual-camera-offset.png'),
+          Buffer.from(screenshotManual),
+        );
+      } else {
+        fs.writeFileSync(
+          path.join(SCREENSHOT_DIR, 'manual-camera-mobile-offset.png'),
+          Buffer.from(screenshotManual),
+        );
+      }
+
+      // ── Step 2: Wait for full return to follow — capture "restored" state ─────
+      await page.waitForTimeout(4500);
+
+      const camFollow = await getCameraState(page);
+      expect(camFollow).not.toBeNull();
+      expect(camFollow!.mode).toBe('follow');
+      expect(camFollow!.weight).toBeLessThan(0.02);
+
+      // Verify timeline is still frozen at landing-burn with identical telemetry
+      const snapAfter = await getAppState(page);
+      expect(snapAfter).not.toBeNull();
+      expect(snapAfter!.phase).toBe('landing-burn');
+      expect(snapAfter!.time).toBeCloseTo(20, 1);
+
+      // Telemetry values must match exactly (timeline frozen at same point)
+      expect(snapBefore!.telemetry.altitude).toBeCloseTo(snapAfter!.telemetry.altitude, 4);
+      expect(snapBefore!.telemetry.velocity).toBeCloseTo(snapAfter!.telemetry.velocity, 4);
+      expect(snapBefore!.telemetry.engineThrust).toBeCloseTo(
+        snapAfter!.telemetry.engineThrust,
+        4,
+      );
+
+      // Verify camera states differ meaningfully (theta shifted during manual drag)
+      expect(camManual!.theta).not.toBeCloseTo(camFollow!.theta, 1);
+
+      // Screenshot: restored follow mode (same frozen checkpoint = identical scene state)
+      const screenshotFollow = await page.screenshot();
+      if (isDesktop) {
+        fs.writeFileSync(
+          path.join(SCREENSHOT_DIR, 'manual-camera-restored-follow.png'),
+          Buffer.from(screenshotFollow),
+        );
+      } else {
+        fs.writeFileSync(
+          path.join(SCREENSHOT_DIR, 'manual-camera-mobile-restored-follow.png'),
+          Buffer.from(screenshotFollow),
+        );
+      }
+
+      // Screenshots should differ because camera framing changed
+      expect(screenshotManual).not.toEqual(screenshotFollow);
+    },
+  );
+
   test('mid-return input cancels return without snap', async ({ page }) => {
-    // Freeze timeline so camera state changes are solely due to interaction
+    // Freeze timeline at landing-burn so camera state changes are solely due to interaction
     await page.evaluate(() => {
+      const api = window.__rocketQA;
+      api.setCheckpoint('landing-burn');
     });
+
+    await page.waitForTimeout(200);
 
     const canvas = page.locator('canvas');
     const box = await canvas.boundingBox();
@@ -767,44 +882,191 @@ test.describe('Rocket Landing - Camera Inactivity Return', () => {
     expect(camAfterDrag!.theta).not.toBeCloseTo(camAfter!.theta, 4);
 
     // Screenshot: manual camera offset (frozen timeline = deterministic)
-    const screenshotManual = await page.screenshot();
-    fs.writeFileSync(path.join(SCREENSHOT_DIR, 'manual-camera-offset.png'), Buffer.from(screenshotManual));
   });
 });
 
-// ─── Real TouchEvent Tests ──────────────────────────────────────────────────
+// ─── Touch Camera Tests (real Chromium CDP touch events) ──────────────────────
 
-test.describe('Rocket Landing - Real Touch Events', () => {
+test.describe('Rocket Landing - Touch Camera Simulation', () => {
   test.beforeEach(async ({ page }) => {
     const errors = collectConsoleAndErrors(page);
     await page.goto('/rocket-landing-3d-version2/');
     await waitForReady(page);
     const msgs = await errors;
-    const jsErrors = msgs.filter(
-      (m) => m.startsWith('[pageerror]') || m.includes('TypeError'),
-    );
+    const jsErrors = msgs.filter((m) => m.startsWith('[pageerror]') || m.includes('TypeError'));
     if (jsErrors.length > 0) {
       throw new Error(`Console/page errors detected: ${jsErrors.join('; ')}`);
     }
   });
 
-  test('real TouchEvent enters manual mode', async ({ page }) => {
+  // ── Single-finger touch orbit via CDP ────────────────────────────────────
+
+  test('single touch drag enters manual mode', async ({ page }) => {
     const canvas = page.locator('canvas');
     const box = await canvas.boundingBox();
     expect(box).not.toBeNull();
     if (!box) return;
 
-    // Use Playwright's touchscreen.tap() which dispatches real TouchEvents
-    // with proper Touch objects created by the browser's touch simulation layer
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
 
-    await page.touchscreen.tap(cx, cy);
-    await page.waitForTimeout(300);
+    // Create CDP session for real touch events
+    const cdp = await page.context().newCDPSession(page);
+
+    // Dispatch: touchStart → touchMove → touchEnd (single finger)
+    await dispatchTouch(cdp, 'touchStart', [{ x: cx, y: cy, id: 0 }]);
+    await dispatchTouch(cdp, 'touchMove', [{ x: cx + 50, y: cy + 30, id: 0 }]);
+    await dispatchTouch(cdp, 'touchEnd', [{ x: cx + 50, y: cy + 30, id: 0 }]);
+
+    // Give the browser time to process the touch events and update camera state
+    await page.waitForTimeout(400);
+    await cdp.detach();
 
     // Mode indicator should be active (manual mode entered via real TouchEvent)
     const modeEl = page.locator('.camera-mode');
     const isActive = await modeEl.evaluate((el) => el.classList.contains('active'));
     expect(isActive).toBe(true);
+  });
+
+  test('touch drag with move orbits camera state', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    // Capture initial camera state before touch gesture
+    const camBefore = await getCameraState(page);
+    expect(camBefore!.mode).toBe('follow');
+    const initialTheta = camBefore!.theta;
+
+    const cdp = await page.context().newCDPSession(page);
+
+    // Single-finger drag: start → multiple move steps → end
+    await dispatchTouch(cdp, 'touchStart', [{ x: cx, y: cy, id: 0 }]);
+    for (let i = 1; i <= 15; i++) {
+      const t = i / 15;
+      const px = cx + 60 * t;
+      const py = cy + 40 * t;
+      await dispatchTouch(cdp, 'touchMove', [{ x: px, y: py, id: 0 }]);
+    }
+    await dispatchTouch(cdp, 'touchEnd', [{ x: cx + 60, y: cy + 40, id: 0 }]);
+
+    await page.waitForTimeout(400);
+    await cdp.detach();
+
+    // Mode should be manual after touch drag
+    const camAfter = await getCameraState(page);
+    expect(camAfter!.mode).toBe('manual');
+    expect(camAfter!.weight).toBeGreaterThan(0.95);
+
+    // Theta should have changed from initial (dragged to the right)
+    expect(camAfter!.theta).not.toBeCloseTo(initialTheta, 1);
+  });
+
+  // ── Two-finger pinch zoom via CDP ────────────────────────────────────────
+
+  test('two-finger pinch changes radius', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    // First enter manual mode with a single touch so we have a baseline radius
+    const cdp1 = await page.context().newCDPSession(page);
+    await dispatchTouch(cdp1, 'touchStart', [{ x: cx, y: cy, id: 0 }]);
+    await dispatchTouch(cdp1, 'touchEnd', [{ x: cx, y: cy, id: 0 }]);
+    await page.waitForTimeout(300);
+    await cdp1.detach();
+
+    // Verify we're in manual mode
+    const camBefore = await getCameraState(page);
+    expect(camBefore!.mode).toBe('manual');
+    const initialRadius = camBefore!.radius;
+
+    // Two-finger pinch: two points starting far apart, then closer together (pinch in)
+    const cdp2 = await page.context().newCDPSession(page);
+    const point1Start = { x: cx - 60, y: cy - 30, id: 0 };
+    const point2Start = { x: cx + 60, y: cy + 30, id: 1 };
+
+    await dispatchTouch(cdp2, 'touchStart', [point1Start, point2Start]);
+
+    // Move both points inward (reduce separation) — standard UX: pinch in = zoom out
+    const point1Mid = { x: cx - 30, y: cy - 15, id: 0 };
+    const point2Mid = { x: cx + 30, y: cy + 15, id: 1 };
+    await dispatchTouch(cdp2, 'touchMove', [point1Mid, point2Mid]);
+
+    // Final positions (pinched further inward)
+    const point1End = { x: cx - 15, y: cy - 8, id: 0 };
+    const point2End = { x: cx + 15, y: cy + 8, id: 1 };
+    await dispatchTouch(cdp2, 'touchMove', [point1End, point2End]);
+
+    await dispatchTouch(cdp2, 'touchEnd', []);
+    await page.waitForTimeout(400);
+    await cdp2.detach();
+
+    const camAfter = await getCameraState(page);
+    expect(camAfter).not.toBeNull();
+    expect(camAfter!.mode).toBe('manual');
+    // Pinch-in (fingers together) should zoom out → larger radius (inverse scale UX)
+    expect(camAfter!.radius).toBeGreaterThan(initialRadius);
+  });
+
+  // ── Consecutive gestures prove listeners persist after touchEnd ──────────
+
+  test('consecutive touches prove listeners persist across touchEnd', async ({ page }) => {
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    const cdp = await page.context().newCDPSession(page);
+
+    // First gesture: touchStart → touchMove → touchEnd
+    await dispatchTouch(cdp, 'touchStart', [{ x: cx, y: cy, id: 0 }]);
+    await dispatchTouch(cdp, 'touchMove', [{ x: cx + 40, y: cy + 20, id: 0 }]);
+    await dispatchTouch(cdp, 'touchEnd', [{ x: cx + 40, y: cy + 20, id: 0 }]);
+    await page.waitForTimeout(300);
+
+    // Verify first gesture entered manual mode
+    let cam = await getCameraState(page);
+    expect(cam!.mode).toBe('manual');
+    const thetaAfterFirst = cam!.theta;
+
+    // Wait past the inactivity timeout to return to follow, then do a second gesture
+    // Actually — test that touchEnd listener persists: do a second gesture immediately
+    // and verify it still affects camera (proves listeners weren't removed at touchEnd)
+    await dispatchTouch(cdp, 'touchStart', [{ x: cx + 40, y: cy + 20, id: 1 }]);
+    await dispatchTouch(cdp, 'touchMove', [{ x: cx + 90, y: cy + 50, id: 1 }]);
+    await dispatchTouch(cdp, 'touchEnd', [{ x: cx + 90, y: cy + 50, id: 1 }]);
+    await page.waitForTimeout(400);
+
+    cam = await getCameraState(page);
+    // Second gesture should still work — theta changed from first gesture's position
+    expect(cam!.theta).not.toBeCloseTo(thetaAfterFirst, 1);
+
+    await cdp.detach();
+  });
+
+  test('touch mobile screenshot shows valid output', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/rocket-landing-3d-version2/');
+    await waitForReady(page);
+
+    const screenshot = await page.screenshot();
+    expect(screenshot.length).toBeGreaterThan(10000);
+
+    fs.writeFileSync(
+      path.join(SCREENSHOT_DIR, `touch-mobile-390x844.png`),
+      Buffer.from(screenshot),
+    );
   });
 });

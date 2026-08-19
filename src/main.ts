@@ -319,6 +319,7 @@ class App {
         play: () => {},
         pause: () => {},
         getCameraState: () => null,
+        getState: () => null,
         isReady: false,
       };
     }
@@ -379,7 +380,7 @@ class App {
           hero: 35,
         };
         const time = cpMap[phase] ?? 0;
-        this._timeline.setQAPercent((time / TOTAL_DURATION) * 100);
+        this._timeline.freezeAt(time);
       },
       play: () => {
         if (!this._isReady) return;
@@ -390,6 +391,7 @@ class App {
         this._timeline.pause();
       },
       getCameraState: () => this._getCameraState(),
+      getState: () => (this._isReady ? this._timeline.getState() : null),
     };
     // Update isReady after assignment so it reflects initialization status
     api.isReady = true;
@@ -422,7 +424,9 @@ class App {
     this._lastTime = now;
 
     // Determine if we're in QA freeze mode (no animation updates)
-    const qaFrozen = this._timeline._qaPercentValue !== undefined && this._timeline._finishedValue;
+    const qaFrozen =
+      this._timeline._isFrozen ||
+      (this._timeline._qaPercentValue !== undefined && this._timeline._finishedValue);
 
     // Update timeline (does nothing during QA freeze)
     this._timeline.update(dt);
@@ -492,49 +496,43 @@ class App {
 
     // Camera choreography — blend between cinematic follow and manual orbit
     if (!this._reducedMotion) {
-      const qaFrozen = this._timeline._qaPercentValue !== undefined;
-
-      // Always update manual camera state so inactivity timer and blend-out progress normally
       const [rx, ry, rz] = rocketState.position;
       const visualCenterY = ry + 6;
+
+      // Always update manual camera state so inactivity timer and blend-out progress normally
       this._manualCamera.updateFocusPoint(rx, visualCenterY, rz);
       this._manualCamera.updateFrame(now);
 
-      if (qaFrozen) {
-        // In QA freeze mode, use pure cinematic camera path only (preserve manual state)
-        this._cameraDir.update(state.phase, state.time, rocketState);
-      } else {
-        const blend = this._manualCamera.getBlendState();
-        const manualPos = this._manualCamera.getPosition();
+      const blend = this._manualCamera.getBlendState();
+      const manualPos = this._manualCamera.getPosition();
 
-        if (blend.weight >= 0.99) {
-          // Fully in manual mode — set position directly, look at focus point
-          this._cameraDir.getCameraPosition() && this._scene.camera.position.copy(manualPos);
-          this._scene.camera.lookAt(rx, visualCenterY, rz);
-        } else if (blend.weight > 0.01) {
-          // Blending — interpolate between cinematic and manual positions
-          const cinematicTarget = this._cameraDir.getCinematicTarget(
-            state.phase,
-            state.time,
-            rocketState,
-          );
-          if (cinematicTarget) {
-            const smoothWeight = blend.weight;
-            const blendedX = cinematicTarget.x + (manualPos.x - cinematicTarget.x) * smoothWeight;
-            const blendedY = cinematicTarget.y + (manualPos.y - cinematicTarget.y) * smoothWeight;
-            const blendedZ = cinematicTarget.z + (manualPos.z - cinematicTarget.z) * smoothWeight;
-            this._scene.camera.position.set(blendedX, blendedY, blendedZ);
-          } else {
-            this._scene.camera.position.copy(manualPos);
-          }
-          this._scene.camera.lookAt(rx, visualCenterY, rz);
-
-          // Keep prevPos in sync for cinematic smoothing on return
-          this._cameraDir.syncPrevPosition(this._scene.camera.position);
+      if (blend.weight >= 0.99) {
+        // Fully in manual mode — set position directly, look at focus point
+        this._cameraDir.getCameraPosition() && this._scene.camera.position.copy(manualPos);
+        this._scene.camera.lookAt(rx, visualCenterY, rz);
+      } else if (blend.weight > 0.01) {
+        // Blending — interpolate between cinematic and manual positions
+        const cinematicTarget = this._cameraDir.getCinematicTarget(
+          state.phase,
+          state.time,
+          rocketState,
+        );
+        if (cinematicTarget) {
+          const smoothWeight = blend.weight;
+          const blendedX = cinematicTarget.x + (manualPos.x - cinematicTarget.x) * smoothWeight;
+          const blendedY = cinematicTarget.y + (manualPos.y - cinematicTarget.y) * smoothWeight;
+          const blendedZ = cinematicTarget.z + (manualPos.z - cinematicTarget.z) * smoothWeight;
+          this._scene.camera.position.set(blendedX, blendedY, blendedZ);
         } else {
-          // Fully cinematic — use normal update path
-          this._cameraDir.update(state.phase, state.time, rocketState);
+          this._scene.camera.position.copy(manualPos);
         }
+        this._scene.camera.lookAt(rx, visualCenterY, rz);
+
+        // Keep prevPos in sync for cinematic smoothing on return
+        this._cameraDir.syncPrevPosition(this._scene.camera.position);
+      } else {
+        // Fully cinematic — use normal update path
+        this._cameraDir.update(state.phase, state.time, rocketState);
       }
 
       // Update mode indicator

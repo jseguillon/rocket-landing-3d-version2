@@ -427,4 +427,202 @@ describe('TimelineEngine', () => {
       expect(engine.time).toBeCloseTo(savedTime + 0.5, 3);
     });
   });
+
+  describe('freezeAt / unfreeze / play / reset', () => {
+    it('freezeAt freezes time at the specified value', () => {
+      const engine = new TimelineEngine();
+      engine.update(10);
+      expect(engine.time).toBeCloseTo(10, 3);
+
+      engine.freezeAt(20);
+      expect(engine.time).toBe(20);
+      expect(engine.playing).toBe(false);
+      // Frozen at mid-flight: not finished (mission complete) but paused and frozen
+      expect(engine.finished).toBe(false);
+      expect(engine.paused).toBe(true);
+      expect(engine._pausedTimeValue).toBe(20);
+    });
+
+    it('freezeAt prevents time advancement during update()', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(15);
+      expect(engine.time).toBe(15);
+
+      engine.update(100); // should not advance while frozen
+      expect(engine.time).toBe(15);
+    });
+
+    it('freezeAt at edge values works correctly', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(0);
+      expect(engine.time).toBe(0);
+
+      engine.freezeAt(TOTAL_DURATION + 100); // should clamp to max
+      expect(engine.time).toBe(TOTAL_DURATION);
+    });
+
+    it('play() clears freeze so timeline advances', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(25);
+      expect(engine.time).toBe(25);
+      expect(engine.playing).toBe(false);
+      expect(engine.finished).toBe(false);
+
+      engine.play();
+      expect(engine.playing).toBe(true);
+      expect(engine.finished).toBe(false);
+
+      // Verify timeline now advances
+      engine.update(3);
+      expect(engine.time).toBeCloseTo(28, 3);
+    });
+
+    it('reset() clears freeze and restarts from zero', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(30);
+      expect(engine.time).toBe(30);
+      expect(engine.finished).toBe(false);
+
+      engine.reset();
+      expect(engine.time).toBe(0);
+      expect(engine.playing).toBe(true);
+      expect(engine.finished).toBe(false);
+
+      // Verify timeline advances from reset
+      engine.update(5);
+      expect(engine.time).toBeCloseTo(5, 3);
+    });
+
+    it('setQAPercent clears any active freeze', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(20);
+      expect(engine.time).toBe(20);
+
+      engine.setQAPercent(50);
+      // setQAPercent should have cleared the freeze and set time to 50% of duration
+      expect(engine._qaPercentValue).toBe(50);
+      expect(engine.time).toBeCloseTo((50 / 100) * TOTAL_DURATION, 3);
+    });
+
+    it('unfreeze() without args starts playing from frozen position', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(22);
+      expect(engine.time).toBe(22);
+
+      engine.unfreeze();
+      expect(engine.playing).toBe(true);
+      expect(engine.time).toBe(22); // time preserved
+
+      engine.update(3);
+      expect(engine.time).toBeCloseTo(25, 3);
+    });
+
+    it('unfreeze() with qaPercent restores QA position', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(20);
+
+      engine.unfreeze(75);
+      expect(engine._qaPercentValue).toBe(75);
+      expect(engine.time).toBeCloseTo((75 / 100) * TOTAL_DURATION, 3);
+    });
+
+    it('frozen checkpoint stays stable across multiple update() calls', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(25);
+
+      for (let i = 0; i < 50; i++) {
+        engine.update(0.1);
+      }
+      expect(engine.time).toBe(25);
+    });
+
+    it('freezeAt then play then freezeAt works correctly', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(10);
+      expect(engine.time).toBe(10);
+
+      engine.play();
+      engine.update(5);
+      expect(engine.time).toBeCloseTo(15, 3);
+
+      // Freeze at a new position
+      engine.freezeAt(20);
+      expect(engine.time).toBe(20);
+    });
+
+    it('play() after freeze clears finished flag', () => {
+      const engine = new TimelineEngine();
+      // Freeze at end to get finished=true
+      engine.freezeAt(TOTAL_DURATION);
+      expect(engine.finished).toBe(true);
+
+      engine.play();
+      expect(engine.finished).toBe(false);
+    });
+
+    it('play() after mid-flight freeze clears _isFrozen', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(15);
+      expect(engine._isFrozen).toBe(true);
+      expect(engine.finished).toBe(false); // mid-flight is not finished
+
+      engine.play();
+      expect(engine._isFrozen).toBe(false);
+    });
+
+    it('_isFrozen reflects current freeze state accurately', () => {
+      const engine = new TimelineEngine();
+      expect(engine._isFrozen).toBe(false);
+
+      engine.freezeAt(10);
+      expect(engine._isFrozen).toBe(true);
+
+      engine.play();
+      expect(engine._isFrozen).toBe(false);
+    });
+
+    it('phase is correct during freeze', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(23); // landing-burn phase (20-27)
+      expect(engine.getPhase()).toBe('landing-burn');
+
+      engine.update(999);
+      expect(engine.getPhase()).toBe('landing-burn');
+    });
+
+    it('rocket state is correct during freeze', () => {
+      const engine = new TimelineEngine();
+      engine.freezeAt(23);
+      const rocketA = engine.getRocketState();
+
+      engine.update(999);
+      const rocketB = engine.getRocketState();
+
+      // Rocket state must be identical when frozen
+      expect(rocketA.position).toEqual(rocketB.position);
+      expect(rocketA.engineThrust).toBeCloseTo(rocketB.engineThrust, 6);
+    });
+
+    it('getState does not claim mid-flight freeze is mission-complete', () => {
+      const engine = new TimelineEngine();
+      // Freeze at landing-burn (time=20), which is mid-flight, NOT hero (time=35)
+      engine.freezeAt(20);
+
+      const state = engine.getState();
+      // Must not be finished — this is a burn in progress, not mission-complete
+      expect(engine.finished).toBe(false);
+      expect(state.playing).toBe(false);
+      expect(state.phase).toBe('landing-burn');
+      expect(state.time).toBe(20);
+    });
+
+    it('freezeAt at TOTAL_DURATION sets finished=true', () => {
+      const engine = new TimelineEngine();
+      // Freezing at the very end should mark as finished
+      engine.freezeAt(TOTAL_DURATION);
+
+      expect(engine.time).toBe(TOTAL_DURATION);
+      expect(engine.finished).toBe(true);
+    });
+  });
 });

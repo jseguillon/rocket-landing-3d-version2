@@ -371,7 +371,8 @@ export class ManualCameraController {
       this._phi = this._targetPhi;
     } else if (e.touches.length === 2) {
       const dist = this._getTouchDistance(e);
-      const scale = dist / this._touchStartDist;
+      if (dist <= 0) return;
+      const scale = this._touchStartDist / dist;
       this._targetRadius = clamp(this._touchStartRadius * scale, 5, 100);
       this._radius = this._targetRadius;
     }
@@ -382,7 +383,8 @@ export class ManualCameraController {
 
   private _onTouchEnd(): void {
     this._isDragging = false;
-    this._cleanupTouchListeners();
+    // Do NOT call _cleanupTouchListeners here — listeners must persist across gestures.
+    // Only remove them in destroy().
     this._cancelInactivityTimer();
     this._startInactivityTimer();
   }
@@ -483,6 +485,10 @@ export class ManualCameraController {
       if (this._weight < 0.01) {
         this._weight = 0;
         this._mode = 'follow';
+        // Reset spherical coords to follow-mode defaults so QA state reflects cinematic camera
+        this._theta = 0;
+        this._phi = Math.PI / 6;
+        this._radius = 30;
       }
     } else if (this._mode === 'manual') {
       this._theta += (this._targetTheta - this._theta) * LERP_FACTOR;
