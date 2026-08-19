@@ -13,13 +13,13 @@ A cinematic JavaScript 3D web experience of a reusable rocket descending from th
   Your browser does not support the video element.
 </video>
 
-[Download demo.webm](docs/demo.webm) — VP8 WebM, 1280×720, 42.76 s, 4.04 MB
+[Download demo.webm](docs/demo.webm) — VP8 WebM, 1280×720, 42.96 s, 4.05 MB
 
 The contact sheet below shows six decoded phases captured during a single CI run:
 
 ![Contact sheet](docs/contact-sheet.png)
 
-Validated in [GitHub Actions run #32245062779](https://github.com/jseguillon/rocket-landing-3d-version2/actions/runs/32245062779). (That run URL serves as provenance reference; it is not guaranteed to remain permanent.)
+Validated in [GitHub Actions run #32245549035](https://github.com/jseguillon/rocket-landing-3d-version2/actions/runs/32245549035). (That run URL serves as provenance reference; it is not guaranteed to remain permanent.)
 
 ## Architecture
 
